@@ -1,0 +1,14 @@
+{
+  "name": "풍차돌리기 매니저",
+  "short_name": "풍차돌리기",
+  "description": "하락장 대처법 풍차돌리기 — 분할 MOC 매도와 등비 지정가 재매수 관리",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f3f5f8",
+  "theme_color": "#1f4e79",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
