@@ -71,6 +71,23 @@ pre.code{background:#1e2430;color:#d6deeb;padding:10px;border-radius:8px;font-si
 .flag{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px dashed var(--line);font-size:13px}
 .y{color:var(--grn);font-weight:700}.n{color:#9aa2b1}
 svg.ch{width:100%;height:auto;background:#fbfcfe;border:1px solid var(--line);border-radius:8px}
+details.gd{border-bottom:1px solid var(--line);padding:4px 0}
+details.gd:last-child{border-bottom:0}
+details.gd summary{cursor:pointer;font-weight:700;font-size:15px;padding:8px 0;list-style:none;display:flex;align-items:center;gap:8px}
+details.gd summary::-webkit-details-marker{display:none}
+details.gd summary::after{content:'▼';margin-left:auto;font-size:11px;color:var(--sub)}
+details.gd[open] summary::after{content:'▲'}
+.gno{display:inline-flex;align-items:center;justify-content:center;min-width:34px;height:26px;padding:0 6px;border-radius:13px;background:var(--pri);color:#fff;font-size:12px}
+.gb{padding:2px 2px 10px;line-height:1.65}
+.gb p{margin:8px 0}
+.gflow{display:flex;align-items:stretch;gap:6px;flex-wrap:wrap;margin:8px 0}
+.gstep{flex:1;min-width:110px;background:#eef6ff;border:1px solid #cfe2f7;border-radius:10px;padding:8px;text-align:center;font-size:13px}
+.garr{align-self:center;color:var(--pri2);font-weight:800}
+table.gt{border-collapse:collapse;width:100%;font-size:13px;margin:8px 0}
+table.gt th,table.gt td{border:1px solid var(--line);padding:6px 8px;vertical-align:top;text-align:left}
+table.gt th{background:#f3f6fa;white-space:nowrap;width:1%}
+table.gt.c th,table.gt.c td{text-align:center;width:auto}
+.gapp{margin-top:8px;background:#ecfaf2;border-left:4px solid var(--grn);padding:7px 10px;border-radius:6px;font-size:13px}
 .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#222c;color:#fff;padding:9px 16px;border-radius:20px;font-size:13px;z-index:99;display:none}
 </style>
 </head>
@@ -170,7 +187,7 @@ function test() {
 <script>
 'use strict';
 /* =========================================================
-   풍차돌리기 매니저 v1.0
+   풍차돌리기 매니저 v1.3
    - 하락장 대처법 풍차돌리기 (분할 MOC 매도 → 등비 지정가 재매수)
    ========================================================= */
 const KEY = 'windmill_mgr_v1';
@@ -188,12 +205,56 @@ function dObj(s) { const [y, m, d] = s.split('-').map(Number); return new Date(D
 function dStr(o) { return o.toISOString().slice(0, 10); }
 function addDays(s, n) { const o = dObj(s); o.setUTCDate(o.getUTCDate() + n); return dStr(o); }
 function isWknd(s) { const w = dObj(s).getUTCDay(); return w === 0 || w === 6; }
-function nextTD(s) { let x = addDays(s, 1); while (isWknd(x)) x = addDays(x, 1); return x; }
-function addTD(s, n) { let x = s; for (let i = 0; i < n; i++) x = nextTD(x); return x; }
+/* 휴장일 달력 (NYSE 공식 발표, 국내는 KRX 공지·정부 월력요항 기준. 2027년 국내는 예상치) */
+const HOL = {
+  US: {
+    '2026-01-01': '신정', '2026-01-19': '마틴 루터 킹 데이', '2026-02-16': '대통령의 날', '2026-04-03': '성금요일', '2026-05-25': '메모리얼 데이',
+    '2026-06-19': '준틴스', '2026-07-03': '독립기념일(대체)', '2026-09-07': '노동절', '2026-11-26': '추수감사절', '2026-12-25': '성탄절',
+    '2027-01-01': '신정', '2027-01-18': '마틴 루터 킹 데이', '2027-02-15': '대통령의 날', '2027-03-26': '성금요일', '2027-05-31': '메모리얼 데이',
+    '2027-06-18': '준틴스(대체)', '2027-07-05': '독립기념일(대체)', '2027-09-06': '노동절', '2027-11-25': '추수감사절', '2027-12-24': '성탄절(대체)'
+  },
+  KR: {
+    '2026-01-01': '신정', '2026-02-16': '설날 연휴', '2026-02-17': '설날', '2026-02-18': '설날 연휴', '2026-03-02': '삼일절(대체)', '2026-05-01': '노동절',
+    '2026-05-05': '어린이날', '2026-05-25': '부처님오신날(대체)', '2026-06-03': '지방선거', '2026-07-17': '제헌절', '2026-08-17': '광복절(대체)',
+    '2026-09-24': '추석 연휴', '2026-09-25': '추석', '2026-10-05': '개천절(대체)', '2026-10-09': '한글날', '2026-12-25': '성탄절', '2026-12-31': '연말 휴장',
+    '2027-01-01': '신정', '2027-02-08': '설날 연휴', '2027-02-09': '설날(대체)', '2027-03-01': '삼일절', '2027-05-03': '노동절(대체)', '2027-05-05': '어린이날',
+    '2027-05-13': '부처님오신날', '2027-07-19': '제헌절(대체)', '2027-08-16': '광복절(대체)', '2027-09-14': '추석 연휴', '2027-09-15': '추석', '2027-09-16': '추석 연휴',
+    '2027-10-04': '개천절(대체)', '2027-10-11': '한글날(대체)', '2027-12-27': '성탄절(대체)', '2027-12-31': '연말 휴장'
+  }
+};
+/* 미국 조기폐장일 (뉴욕 시각 13:00 마감) */
+const EARLY = { US: { '2026-11-27': 13 * 60, '2026-12-24': 13 * 60, '2027-11-26': 13 * 60 }, KR: {} };
+let MK = 'US'; // 현재 종목의 시장 (거래일 계산 기준)
+let HCACHE = {};
+function holMap(mk) {
+  if (HCACHE[mk]) return HCACHE[mk];
+  const m = Object.assign({}, HOL[mk] || {});
+  ((S.learnHol || {})[mk] || []).forEach(d => { if (!m[d]) m[d] = '휴장(시세 데이터 기준)'; });
+  ((S.customHol || {})[mk] || []).forEach(d => { m[d] = m[d] || '직접 추가한 휴장일'; });
+  return (HCACHE[mk] = m);
+}
+const holName = (s, mk = MK) => holMap(mk)[s] || '';
+const isClosed = (s, mk = MK) => isWknd(s) || !!holMap(mk)[s];
+const firstTD = (s, mk = MK) => isClosed(s, mk) ? nextTD(s, mk) : s;
+function nextTD(s, mk = MK) { let x = addDays(s, 1); while (isClosed(x, mk)) x = addDays(x, 1); return x; }
+function addTD(s, n, mk = MK) { let x = s; for (let i = 0; i < n; i++) x = nextTD(x, mk); return x; }
 function tdCount(a, b) { if (!a || !b || b <= a) return 0; let n = 0, x = a; while (x < b) { x = nextTD(x); n++; } return n; }
 function monday(s) { const o = dObj(s); const w = (o.getUTCDay() + 6) % 7; o.setUTCDate(o.getUTCDate() - w); return dStr(o); }
 const md = s => s ? s.slice(5).replace('-', '.') : '';
 const maxD = (a, b) => (!a ? b : !b ? a : (a > b ? a : b));
+/* 시장 현지 날짜·시각 (미국: 뉴욕, 국내: 서울) */
+function nowIn(tz) {
+  const f = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
+  const p = Object.fromEntries(f.formatToParts(new Date()).map(x => [x.type, x.value]));
+  return { date: `${p.year}-${p.month}-${p.day}`, hm: (+p.hour % 24) * 60 + (+p.minute) };
+}
+/* 해당 날짜(시장 현지 날짜)의 정규장이 끝나 종가가 확정됐는지 */
+function isFinal(it, d) {
+  const n = nowIn(it.market === 'US' ? 'America/New_York' : 'Asia/Seoul');
+  const early = (EARLY[it.market] || {})[d];
+  const close = early ? early + 5 : (it.market === 'US' ? 16 * 60 + 5 : 15 * 60 + 40);
+  return d < n.date || (d === n.date && n.hm >= close);
+}
 function toast(m) { const t = $('toast'); t.textContent = m; t.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(() => t.style.display = 'none', 2200); }
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -220,8 +281,11 @@ function load() {
 let S = load();
 let TAB = 'dash';
 const OPEN = {};
+const DOPEN = {}; // 펼침 상태 기억 (다시 그려도 유지)
+let PEND = false, LAST_REF = 0;
+const editing = () => { const a = document.activeElement; return !!(a && $('app').contains(a) && /INPUT|SELECT|TEXTAREA/.test(a.tagName)); };
 function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast('저장 실패: ' + e.message); } }
-const IT = () => S.items.find(x => x.id === S.active) || S.items[0];
+const IT = () => { const it = S.items.find(x => x.id === S.active) || S.items[0]; if (it) MK = it.market; return it; };
 const RD = (it, id) => it.rounds.find(r => r.id === id);
 
 /* ---------- 가격/표시 ---------- */
@@ -358,7 +422,7 @@ function weekly(daily) {
 function pickWeek(it, w) {
   if (!w.length) return null;
   const L = w[w.length - 1];
-  const complete = today() > addDays(L.k, 4);
+  const complete = isFinal(it, addDays(L.k, 4)); // 시장 현지 금요일 정규장 마감 후 확정
   if (complete || it.includeCurrentWeek) return { ...L, complete };
   return w.length > 1 ? { ...w[w.length - 2], complete: true } : null;
 }
@@ -416,21 +480,45 @@ function nextPlan(it, I) {
   const gap = gapFor(it, no);
   if (!free.length) return { no, gap, none: true, sl };
   const slot = free[0];
-  const starts = rs.map(r => r.sells[0]?.d).filter(Boolean).sort();
-  const lastStart = starts[starts.length - 1];
-  let earliest = null, why = '';
+  let earliest = null, why = '', sibling = null;
   if (!slot.last) {
-    if (!rs.length) { earliest = today(); why = '30주선 아래 음봉(시작 신호) 확인 후 출발'; }
+    if (!rs.length) { earliest = today(); why = '시작 신호(주봉 몸통 전체가 30주선 아래 음봉) 확인 후 첫 주 출발'; }
     else {
-      const prevLast = rs.map(r => r.sells[r.sells.length - 1]?.d).filter(Boolean).sort().pop();
-      earliest = prevLast ? nextTD(prevLast) : today();
-      why = '직전 회차 5일 매도가 끝난 다음 주 출발';
+      // 1회차 첫 주, 2회차 다음 주: 직전 회차 출발 주의 다음 주 월요일
+      const prevStart = rs.map(r => r.sells[0]?.d).filter(Boolean).sort().pop();
+      earliest = prevStart ? firstTD(addDays(monday(prevStart), 7)) : today();
+      why = '직전 회차 출발 주의 다음 주 출발 (신호 조건 없음)';
     }
   } else {
-    earliest = maxD(slot.freeDate ? nextTD(slot.freeDate) : today(), lastStart ? addTD(lastStart, num(it.minGap)) : null);
-    why = `${slot.last.no}회차 재매수 완료 물량으로 출발 (5주선 아래일 때, 직전 출발과 ${it.minGap}거래일 이상 간격)`;
+    // 3회차부터: 재매수 완료 후 5주선 아래라면 다음 거래일 출발
+    earliest = slot.freeDate ? nextTD(slot.freeDate) : today();
+    why = `${slot.last.no}회차 재매수 완료(${md(slot.freeDate)}) 물량으로 출발 — 5주선 아래라면 다음 거래일`;
+    // 같은 날 재매수가 끝난 다른 회차가 이미 출발했다면 2~3일 차이
+    sibling = rs.find(r => slot.freeDate && srcDone(it, I, r) === slot.freeDate);
+    if (sibling && sibling.sells[0]) {
+      earliest = maxD(earliest, addTD(sibling.sells[0].d, num(it.minGap)));
+      why += ` · 같은 날 완료된 ${sibling.no}회차가 ${md(sibling.sells[0].d)} 출발 → ${it.minGap}거래일 차이`;
+    }
   }
-  return { no, gap, slot: slot.s, earliest, why, sl, lastStart, initial: !slot.last };
+  return { no, gap, slot: slot.s, earliest, why, sl, initial: !slot.last, sibling };
+}
+/* 회차가 출발할 때 쓴 물량의 재매수 완료일 (같은 슬롯의 직전 회차 완료일) */
+function srcDone(it, I, r) {
+  let prev = null, k0 = -1;
+  it.rounds.forEach((x, k) => { if (x.slot === r.slot && x.no < r.no && (!prev || x.no > prev.no)) { prev = x; k0 = k; } });
+  return prev ? I.rcs[k0].doneDate : null;
+}
+
+/* 시세 데이터에 없는 평일 = 휴장일 (종목·기준지수 모두 없을 때만, 거래정지 오인 방지) */
+function learnHolidays(it) {
+  const a = it.quote && it.quote.daily; if (!a || a.length < 2) return;
+  const b = it.idxQuote && it.idxQuote.daily;
+  const has = new Set(a.map(x => x[0])), hasB = b ? new Set(b.map(x => x[0])) : null;
+  const S0 = (S.learnHol = S.learnHol || {}), arr = new Set(S0[it.market] || []);
+  let x = a[0][0]; const end = a[a.length - 1][0];
+  while (x < end) { x = addDays(x, 1); if (!isWknd(x) && !has.has(x) && (!hasB || !hasB.has(x)) && x < end) arr.add(x); }
+  S0[it.market] = [...arr].sort().slice(-200);
+  HCACHE = {};
 }
 
 /* ---------- 렌더 ---------- */
@@ -446,11 +534,13 @@ function render() {
     const x = a / b - 1; chg = ` <b class="${cls(x)}" style="color:${x < 0 ? '#bcd7ff' : '#ffd0d0'}">${(x * 100).toFixed(2)}%</b>`;
   }
   $('hprice').innerHTML = p ? `현재가 <b>${fp(it, p)}</b>${chg} · ${it.useManual ? '수동가격' : (q ? '갱신 ' + esc(q.at || '') : '수동가격')}` : '현재가 없음 — [⟳ 시세] 또는 [신호] 탭에서 직접 입력';
-  const tabs = [['dash', '대시보드'], ['rounds', '회차'], ['signal', '신호'], ['set', '설정']];
+  const tabs = [['dash', '대시보드'], ['rounds', '회차'], ['signal', '신호'], ['guide', '설명서'], ['set', '설정']];
   $('tabs').innerHTML = tabs.map(([k, l]) => `<button class="${TAB === k ? 'on' : ''}" onclick="A.tab('${k}')">${l}</button>`).join('');
   const I = ic(it);
-  const v = { dash: vDash, rounds: vRounds, signal: vSignal, set: vSet }[TAB];
+  const v = { dash: vDash, rounds: vRounds, signal: vSignal, guide: vGuide, set: vSet }[TAB];
+  document.querySelectorAll('#app details[data-k]').forEach(d => DOPEN[d.dataset.k] = d.open);
   $('app').innerHTML = v(it, I);
+  document.querySelectorAll('#app details[data-k]').forEach(d => { if (d.dataset.k in DOPEN) d.open = DOPEN[d.dataset.k]; });
   save();
 }
 const stBadge = s => ({ selling: '<span class="badge b-sell">매도 중</span>', buying: '<span class="badge b-buy">재매수 대기</span>', paused: '<span class="badge b-pause">5주선 회복 대기</span>', done: '<span class="badge b-done">재매수 완료</span>', stopped: '<span class="badge b-stop">STOP</span>' }[s]);
@@ -496,10 +586,9 @@ function vDash(it, I) {
       else if (!np.initial) cond = v.under5 === true ? '<span class="y">5주선 아래 — 출발 가능</span>' : v.under5 === 'mixed' ? '<span class="badge b-mix">판단 필요</span>' : v.under5 === false ? '<span class="n">5주선 위 — 대기</span>' : '<span class="n">신호 없음</span>';
       else cond = '<span class="y">다음 주 출발</span>';
       const def = maxD(np.earliest, today());
-      const gapWarn = np.lastStart && tdCount(np.lastStart, np.earliest) < num(it.minGap);
       nextHtml = `
       <div class="row"><b>${np.no}회차</b> · 슬롯 ${np.slot} · 간격 <b>${np.gap}%</b> · ${slotQty(it)}주 (하루 ${Math.floor(slotQty(it) / num(it.sellDays))}주 × ${it.sellDays}일) · ${cond}</div>
-      <div class="muted">${esc(np.why)}${np.earliest ? ' · 가능일 ' + md(np.earliest) + ' 이후' : ''}${gapWarn ? ' · <b style="color:var(--org)">직전 출발과 간격이 짧습니다</b>' : ''}</div>
+      <div class="muted">${esc(np.why)}${np.earliest ? ' · 가능일 ' + md(np.earliest) + ' 이후' : ''}</div>
       <div class="row"><label class="f" style="max-width:180px">출발일(1일차 매도)<input type="date" id="nsDate" value="${def}"></label>
       <button class="btn gr" onclick="A.startRound()" style="align-self:flex-end">${np.no}회차 출발</button></div>`;
     }
@@ -562,7 +651,7 @@ function vStop(it, I) {
    <td>${num(b.q) && num(b.p) ? famt(num(b.q) * num(b.p) * (1 + bf)) : '-'}</td></tr>`).join('');
   return `<div class="card"><h3>⛔ STOP — 5거래일 분할 종가 매수</h3>
    <div class="muted">STOP 시점: ${md(P.date)} · 기준가 ${fp(it, P.price)} · 미회수 ${P.unrec ?? '-'}주 · 현금 ${money(it, P.cash)}<br>
-   현금으로 살 수 있는 수량 약 <b>${P.total ?? '-'}주</b> ${P.total == null ? '' : P.total >= P.unrec ? `(미회수 ${P.unrec}주 + 차익금으로 추가 <b>${P.total - P.unrec}주</b>)` : `<b style="color:var(--red)">(현재가가 매도가보다 높아 미회수 ${P.unrec}주를 다 되사지 못합니다 — ${P.unrec - P.total}주 부족)</b>`}</div>
+   매수 계획 <b>${P.total ?? '-'}주</b> (미회수 수량 ${P.unrec ?? 0}주 우선 + 추가 매수 ${P.extra ?? 0}주)${P.shortfall > 0 ? `<br><b style="color:var(--red)">미회수 수량 매수에 ${money(it, P.shortfall)} 부족합니다. 추가 자금이 필요합니다.</b>` : ''}</div>
    <div class="tw" style="margin-top:8px"><table class="x"><tr><th>일차</th><th>일자</th><th>수량</th><th>체결가</th><th>금액</th></tr>${rows}</table></div>
    <div class="muted" style="margin-top:6px">남은 현금 ${money(it, I.cash)} · 현재 보유 ${I.hold}주</div>
    <div class="row"><button class="btn s g" onclick="A.undoStop()">STOP 취소</button></div></div>`;
@@ -587,10 +676,11 @@ function roundCard(it, r, c) {
   let trs = '';
   for (let i = 0; i < n; i++) {
     const s = c.rows[i], od = c.ords[i];
-    const sc = s ? `<td><input type="date" value="${r.sells[i].d || ''}" onchange="A.setSell('${r.id}',${i},'d',this.value)"></td>
+    const hn = s && r.sells[i].d && isClosed(r.sells[i].d) ? (holName(r.sells[i].d) || '주말') : '';
+    const sc = s ? `<td><input type="date" value="${r.sells[i].d || ''}" style="${hn ? 'border-color:var(--red);color:var(--red)' : ''}" title="${hn ? '휴장: ' + hn : ''}" onchange="A.setSell('${r.id}',${i},'d',this.value)"></td>
       <td><input class="q" value="${r.sells[i].q ?? ''}" onchange="A.setSell('${r.id}',${i},'q',this.value)"></td>
       <td>${s.done ? s.cq : '-'}</td>
-      <td><input value="${r.sells[i].p ?? ''}" placeholder="종가" onchange="A.setSell('${r.id}',${i},'p',this.value)"></td>
+      <td><input value="${r.sells[i].p ?? ''}" placeholder="종가" title="${r.sells[i].auto ? '시세에서 자동으로 채운 확정 종가' : ''}" style="${r.sells[i].auto ? 'background:#eaf7ee' : ''}" onchange="A.setSell('${r.id}',${i},'p',this.value)"></td>
       <td>${s.done ? famt(s.q * s.p) : '-'}</td><td>${s.done ? famt(s.ca) : '-'}</td><td>${s.done ? fp(it, s.avg) : '-'}</td>`
       : '<td colspan="7"></td>';
     let oc = '<td colspan="6"></td>';
@@ -624,7 +714,10 @@ function roundCard(it, r, c) {
    </table></div>
    <div class="muted" style="margin-top:4px">평균이익률 ${pct(c.simple)} (단순평균) · 실투입 기준 ${pct(c.weighted)} ${c.placed && !c.prov ? `· 주문일 ${md(c.placed)} → 유효기간 ~${md(c.expire)}` : ''}${c.prov && c.avg ? ' · <i>지정가는 매도 진행분 기준 잠정치</i>' : ''}</div>`;
   // 액션
-  let acts = `<div class="row">
+  const badDays = r.sells.filter(x => x.d && isClosed(x.d));
+  let acts = badDays.length ? `<div class="alert bad" style="margin-top:8px">📅 매도일 중 휴장일이 있습니다: ${badDays.map(x => md(x.d) + ' ' + (holName(x.d) || '주말')).join(', ')}
+     <button class="btn s" onclick="A.fixDates('${r.id}')">휴장일 건너뛰어 날짜 다시 잡기</button></div>` : '';
+  acts += `<div class="row">
    <button class="btn s g" onclick="A.autoFill('${r.id}')">종가 자동채우기</button>
    <button class="btn s g" onclick="A.addSell('${r.id}')">매도일 +</button>
    <button class="btn s g" onclick="A.delSell('${r.id}')">매도일 −</button>
@@ -633,12 +726,12 @@ function roundCard(it, r, c) {
     const half = Math.ceil(c.soldQ / 2);
     const G = signals(it);
     const wkC = G.t.bar ? G.t.bar.c : I_price(it);
-    acts += `<details class="mini"><summary>일괄 체결 입력 (남은 주문 ${c.openQ}주)</summary>
+    acts += `<details class="mini" data-k="bk-${r.id}"><summary>일괄 체결 입력 (남은 주문 ${c.openQ}주)</summary>
       <div class="row"><label class="f">체결일<input type="date" id="bd_${r.id}" value="${today()}"></label>
       <label class="f">평균 체결가<input id="bp_${r.id}" placeholder="예: 48.0881"></label>
       <button class="btn s" style="align-self:flex-end" onclick="A.bulk('${r.id}')">남은 주문 모두 체결</button></div>
       <div class="muted">지정가가 모두 현재가보다 높아(파란색) 한 번에 산 경우처럼, 같은 가격에 일괄 체결됐을 때 씁니다.</div></details>`;
-    if (c.status === 'buying') acts += `<details class="mini"><summary>5주선 회복 처리 (50%까지 채우고 대기)</summary>
+    if (c.status === 'buying') acts += `<details class="mini" data-k="rc-${r.id}"><summary>5주선 회복 처리 (50%까지 채우고 대기)</summary>
       <div class="muted">현재 재매수 ${c.filledQ}주 / 50% 기준 ${half}주 → ${c.filledQ >= half ? '<b>이미 50% 이상: 추가 매수 없이 대기</b>' : `<b>${half - c.filledQ}주 추가 매수</b> 후 대기`}. 부족분은 높은 지정가 주문부터 차감합니다.</div>
       <div class="row"><label class="f">매수일<input type="date" id="rd_${r.id}" value="${G.t.bar ? (G.t.bar.d2 || today()) : today()}"></label>
       <label class="f">매수가 (금요일 종가 또는 다음 거래일 시장가)<input id="rp_${r.id}" value="${wkC || ''}"></label>
@@ -683,7 +776,7 @@ function sigCard(it, which, title, tk) {
    <div class="flag"><span>5주선 회복: 몸통 전체 위</span>${yn(j.rec5)}</div>
    <div class="flag"><span>STOP: 몸통 전체 30주선 위</span>${yn(j.stop)}</div>
    ${tbl}
-   <details class="mini"><summary>직접 입력 (자동 조회가 안 될 때)</summary>
+   <details class="mini" data-k="mn-${which}"><summary>직접 입력 (자동 조회가 안 될 때)</summary>
     <div class="row">
      <label class="f">주(날짜)<input type="date" value="${m.d || ''}" onchange="A.setMan('${which}','d',this.value)"></label>
      <label class="f">주봉 시가<input value="${m.o || ''}" onchange="A.setMan('${which}','o',this.value)"></label>
@@ -701,6 +794,98 @@ function vSignal(it) {
    </div>
    <div class="row"><label class="f" style="max-width:200px">현재가 직접 입력<input value="${it.manual.price || ''}" placeholder="자동조회 안 될 때" onchange="A.setMan('price','',this.value)"></label></div></div>
    <div class="sig">${sigCard(it, 't', '종목', it.ticker)}${it.indexTicker ? sigCard(it, 'i', '기준지수', it.indexTicker) : '<div class="card muted">기준지수를 설정하지 않았습니다 ([설정] 탭).</div>'}</div>`;
+}
+
+/* ---------- 설명서 ---------- */
+function vGuide() {
+  const sec = (no, title, body, app, open) => `<details class="gd" data-k="g-${no}" ${open ? 'open' : ''}><summary><span class="gno">${no}</span>${title}</summary><div class="gb">${body}${app ? `<div class="gapp">📱 앱에서는: ${app}</div>` : ''}</div></details>`;
+  const flow = arr => `<div class="gflow">${arr.map((x, i) => `${i ? '<span class="garr">→</span>' : ''}<div class="gstep">${x}</div>`).join('')}</div>`;
+  return `
+  <div class="card"><h3>📘 하락장 대처법 풍차돌리기 설명서</h3>
+   <div class="muted">하락장에서 보유 주식 일부를 나눠 팔고, 더 싼 가격에 같은 수량을 되사서 <b>주식 수는 지키면서 현금을 남기는</b> 방법입니다. 항목을 눌러 펼쳐 보세요.</div>
+   <div class="row"><button class="btn s g" onclick="A.guideAll(1)">모두 펼치기</button><button class="btn s g" onclick="A.guideAll(0)">모두 접기</button></div></div>
+  <div class="card gcard">
+  ${sec('01', '풍차돌리기는 어떻게 작동하나요?', `
+    ${flow(['사탕 1개를<br><b>50원</b>에 팔아요', '같은 사탕을<br><b>47원</b>에 다시 사요', '사탕 1개를 되찾고<br><b>3원</b>이 남아요'])}
+    <p>반대로 <b>55원</b>에 되사면 55원 − 50원 = <b class="neg">5원 추가 지출</b>이 생깁니다.</p>
+    <p>사탕 1개를 <b>SOXL 1주</b>라고 생각하면 됩니다. 팔았던 수량을 더 싸게 되사면 주식 수는 그대로이고 차액만큼 현금이 남습니다. 팔고 나서 오르면 되사는 데 돈이 더 듭니다.</p>`, '', true)}
+  ${sec('02', '언제 시작하고 언제 쉬나요?', `
+    <table class="gt"><tr><th>처음 시작</th><td>주봉 <b>시가와 종가가 모두 30주선 아래</b>, 종가가 시가보다 낮은 <b>음봉</b>(몸통 전체가 30주선 아래) → 1회차는 첫 주, 2회차는 다음 주</td></tr>
+    <tr><th>3회차부터</th><td>1·2회차 중 한 회차가 <b>재매수를 완료</b>했고 <b>5주선 아래</b>라면, 그 물량으로 <b>다음 거래일</b>에 시작할 수 있습니다. 회차마다 시작 날짜가 달라집니다.</td></tr>
+    <tr><th>새 회차 대기</th><td>주봉 <b>시가와 종가가 모두 5주선 위</b>면 판 수량의 <b>절반까지 채우고 대기</b>합니다.</td></tr></table>
+    <p><b>확인 시점</b>: 미국 현지 <b>금요일 정규장 마감 후</b> SOXX와 SOXL의 확정 주봉을 함께 확인합니다. 금요일이 휴장이면 그 주 마지막 거래일에 확인합니다. (QQQ가 아니라 SOXX를 봅니다.)</p>
+    <p><b>두 종목 중 하나만 조건을 충족하면</b>: 판정 기준이 정해져 있지 않습니다. 대부분은 함께 움직이지만, SOXX는 아닌데 SOXL만 조건을 충족하는 경우가 있을 수 있습니다. 이때는 본인이 판단합니다.</p>
+    <p class="muted">풍차는 주봉 몸통 전체가 30주선을 하향 이탈할 때 돌기 시작합니다. 주 단위로 판단하니 대응이 다소 늦지만, 너무 일찍(하락 초입에) 들어가면 휩소에 걸릴 확률이 올라갑니다.</p>`,
+    '[신호] 탭에서 종목·기준지수의 주봉, 5주선, 30주선과 판정 결과를 봅니다. 엇갈리면 "판단 필요"로 표시됩니다.')}
+  ${sec('03', 'SOXL 400주로 풍차 시작하기', `
+    ${flow(['400주 보유', '<b>200주</b> 그대로 보유', '<b>200주</b> 풍차에 사용<br>(100주씩 2개)'])}
+    <p>200주를 계속 보유하는 이유는 <b>포지션을 중립</b>으로 만들기 위해서입니다. 각 회차는 100주를 <b>5거래일 동안 하루 20주씩 MOC로 매도</b>합니다.</p>
+    <p>1회차는 첫 주, 2회차는 다음 주에 출발합니다. 2회차가 매도하는 동안에도 1회차 재매수는 체결될 수 있습니다.</p>
+    <p><b>회차 번호는 출발 순서</b>입니다. 나중에 출발한 회차가 먼저 끝날 수도 있습니다. 예: 4회차가 재매수를 마치면 5회차가 시작될 수 있고, 그때 3회차는 아직 재매수를 기다리는 중일 수 있습니다.</p>`,
+    '[설정]에서 총 수량 400, 코어 200, 슬롯 2를 넣으면 회차당 100주, 하루 20주가 자동 계산됩니다. 실전 예시는 1,600주 중 800주, 회차당 400주(하루 80주)로 비율이 같습니다.')}
+  ${sec('04', '풍차돌리기 주문 방법', `
+    <table class="gt"><tr><th>팔 때는 MOC</th><td>장 마감 시장가. 하루 20주씩 5거래일. 주문에 가격을 적지 않습니다.</td></tr>
+    <tr><th>되살 때는 일반 지정가</th><td>5일 매도가 끝난 뒤 주문 5개. 주문마다 20주. 지정가 이하에서 체결됩니다.</td></tr></table>
+    <p>예: <b>$47.50 지정가 매수</b> → $47.40에는 체결될 수 있고, $47.60에는 체결되지 않습니다.</p>
+    <p>되살 때 지정가로 하는 이유는 될 수 있으면 빨리 주식을 회수하기 위해서입니다(휩소 대비). 지정가 매수라서 <b>프리장·정규장·애프터장·주간장</b> 어디서든 그 가격에 파는 사람이 있으면 체결됩니다. 기간잔량으로 약 1달 걸어 두는 것은 매일 주문을 넣기 번거로워서일 뿐입니다.</p>`,
+    '[회차] 탭에서 매일 MOC 체결가를 입력하거나 [종가 자동채우기]를 누릅니다. 확정 종가만 채워집니다. 매도일은 주말과 휴장일(예: 추수감사절)을 건너뛰어 잡힙니다.')}
+  ${sec('04-1', '매수 주문은 언제 걸어요?', `
+    ${flow(['① 1회차 매도 완료<br>5거래일 20주씩 MOC<br>→ 평균 매도가 계산', '② 일반 지정가 매수 5개<br>예: $47.50 × 20주', '③ 약 한 달 체결 대기<br>기간잔량 예약매수'])}
+    <p>증권사 앱에서 <b>주문 유효기간과 적용 세션</b>을 확인하세요. 기간이 끝나 다시 주문할 때는 <b>미체결 수량만</b> 넣습니다.</p>`,
+    '5일 매도가 끝나면 지정가 5개가 자동으로 만들어집니다. 주문일로부터 30일이 지나면 "유효기간 만료 — 미체결 수량만 다시 넣으세요" 알림이 뜹니다.')}
+  ${sec('05', '1회차 평균 매도가 구하기', `
+    <table class="gt c"><tr><th>1일차</th><th>2일차</th><th>3일차</th><th>4일차</th><th>5일차</th></tr><tr><td>$52 × 20주</td><td>$51 × 20주</td><td>$50 × 20주</td><td>$49 × 20주</td><td>$48 × 20주</td></tr></table>
+    <p>5거래일 동안 총 100주 매도, 받은 돈 합계 $5,000 → <b>$5,000 ÷ 100주 = 주당 $50</b></p>
+    <p>날마다 체결 수량이 다르면 <b>실제로 받은 금액 합계 ÷ 실제로 판 수량</b>으로 나눕니다.</p>`,
+    '평균단가는 실제로 매도한 수량 기준으로만 계산합니다. 5일 매도가 끝나기 전 지정가는 회색 "잠정"으로 표시됩니다.')}
+  ${sec('06', '1회차 지정가 주문 5개', `
+    <p>평균 매도가 $50, 매수 간격 5% → <b>n번째 주문가 = 평균 매도가 × (1 − 간격)ⁿ</b> (센트 단위 반올림)</p>
+    <table class="gt c"><tr><th>매수1</th><th>매수2</th><th>매수3</th><th>매수4</th><th>매수5</th></tr><tr><td>$47.50</td><td>$45.13</td><td>$42.87</td><td>$40.73</td><td>$38.69</td></tr><tr><td>20주</td><td>20주</td><td>20주</td><td>20주</td><td>20주</td></tr></table>
+    <p>100주 매도대금 $5,000 → 100주 재매수 비용 $4,298.40 → <b>100주를 되찾고 현금 $701.60이 남습니다.</b></p>
+    <p>매수가 사이 간격은 <b>등비수열</b>입니다. 바로 위 가격에 0.95(5%일 때)를 곱해 다음 매수가를 정합니다.</p>
+    <p class="muted">계산은 반올림 전 평단으로 이어서 곱합니다. 반올림한 값을 손으로 이어 곱하면 1센트 차이가 날 수 있습니다. (예: 6회차 평단 43.544 × 0.975² = 41.39, 반올림값 42.46 × 0.975 = 41.40)</p>`,
+    '지정가와 실제 체결가를 따로 입력합니다. 이익은 실제 체결가로 계산합니다.')}
+  ${sec('06-1', '회차가 바뀌면 매수가도 다시 계산해요', `
+    <table class="gt c"><tr><th>1회차</th><th>2회차</th><th>3회차</th><th>4회차</th><th>5회차</th><th>6회차부터</th></tr><tr><td>5%</td><td>4.5%</td><td>4%</td><td>3.5%</td><td>3%</td><td>2.5%</td></tr></table>
+    <p>예: 2회차 평균 매도가 $50, 간격 4.5% → $50 × 0.955 = <b>$47.75</b>가 첫 지정가</p>
+    <p>매수 5칸은 같은 비율을 한 번씩 더 곱합니다. 2.5%는 매수 간격의 하한입니다. 시간이 갈수록 바닥이 가까워지므로 간격을 줄입니다.</p>
+    <p><b>하락이 많이 진행된 뒤 늦게 진입할 때</b>는 처음부터 2.5% 간격으로 계산합니다.</p>
+    <p class="muted">TQQQ, 미장·국장의 다른 3배 레버리지, 변동성이 큰 종목에 적용할 때는 그 종목의 변동성을 감안해 간격(이익률)을 조정합니다. 이 앱의 국내 기본값(3→1.5%)은 미국 기본값의 약 60%로 잡은 것입니다.</p>`,
+    '[설정 → 회차별 매수 간격]에서 수정합니다. "늦게 진입" 체크 시 처음부터 마지막 간격을 씁니다.')}
+  ${sec('07', '먼저 끝난 회차가 이어져요', `
+    <p>400주 중 200주는 계속 보유하고, 나머지 200주를 100주씩 운용합니다.</p>
+    <table class="gt"><tr><th>1회차 · 첫 주</th><td>100주를 5거래일 동안 하루 20주씩 매도 → 매도가 끝나면 1회차 재매수 대기</td></tr>
+    <tr><th>2회차 · 다음 주</th><td>다른 100주도 하루 20주씩 5거래일 매도. 그동안 1회차 재매수는 진행될 수 있음</td></tr>
+    <tr><th>3회차부터</th><td>먼저 100주를 다 되산 물량으로, 시작 조건이 맞으면 출발</td></tr></table>
+    ${flow(['2회차가 먼저<br>100주 재매수 완료', '그 100주로<br><b>3회차</b> 시작', '3회차도 먼저 끝나면<br>그 물량으로 <b>4회차</b>'])}
+    <p>이때 1회차는 아직 재매수 대기 중일 수 있습니다. 4회차 이후도 같은 방식입니다.</p>
+    <p><b>3회차부터는 정해진 주간 간격이 없습니다.</b> 해당 물량을 모두 되사고 5주선 아래 등 새 회차 조건이 맞으면 다음 거래일에 그 물량으로 시작할 수 있습니다. <b>두 회차가 동시에 끝나면</b> 2~3일 차이를 두고 출발합니다.</p>`,
+    '[대시보드 → 다음 회차]가 먼저 비는 슬롯, 회차 번호, 간격, 출발 가능일을 자동으로 알려줍니다.')}
+  ${sec('08', '5주선을 회복했다가 다시 내려오면?', `
+    <p class="muted">미국 금요일 장 마감 후 SOXX·SOXL 주봉으로 확인합니다.</p>
+    ${flow(['① 5주선 위로<br>몸통 전체 회복<br>→ <b>50%까지 채우고 대기</b>', '② 5주선 재이탈<br>→ 같은 회차 남은 50주<br><b>지정가 재매수 재개</b>', '③ 100주 전량 재매수<br>→ 조건 확인 후<br><b>다음 회차 출발</b>'])}
+    <p>예: 100주를 팔았고 40주가 이미 체결됐다면 10주를 더 사서 50주로 맞추고 대기합니다(40주 + 10주 = 50주). 다시 하락할 수 있기 때문입니다. <b>이미 50% 이상 매수했다면 추가 매수 없이 대기</b>합니다.</p>
+    <p>회차 매도를 시작했다면 중간에 5주선을 회복해도 <b>5거래일 매도는 끝까지</b> 마칩니다.</p>
+    <p>5주선 재이탈 때는 <b>대기 중인 회차의 미체결 매수만</b> 이어갑니다. 이것은 같은 회차 안에서 진행되는 일이고, 새 회차 시작은 전량 재매수 후 따로 판단합니다.</p>`,
+    '[회차] 탭 → "5주선 회복 처리"로 부족분을 매수하면 높은 지정가 주문부터 수량이 줄어듭니다. 재이탈 시 "주문 재개"를 누르면 남은 수량을 원래 지정가로 다시 겁니다.')}
+  ${sec('08-1', '풍차를 완전히 끝낼 때 (STOP)', `
+    ${flow(['30주선 위로<br>주봉 몸통 전체 안착<br>(시가·종가 모두 위)', '상승장 전환으로 봐요', '아직 못 되산 수량 + 차익금<br><b>5거래일에 나눠 종가 매수</b>'])}
+    <p>차익금으로 SOXL 수량을 더 늘립니다. 30주선은 약 150거래일에 해당하는 기간으로, 풍차의 상승장·하락장 경계입니다.</p>
+    <p>이 방식은 회차가 진행될수록 이익금이 쌓이는 구조라 한번 시작하면 중독성이 있어 그만두기가 쉽지 않습니다. 그래서 STOP 시점을 정해 놓은 것입니다. 상승장에서는 매도 후 되사지 못할 확률이 올라가므로, 상승장으로 전환되면 멈춥니다.</p>`,
+    'STOP 신호가 나오면 대시보드에 알림이 뜹니다. [STOP 처리]를 누르면 미회수 수량과 현금으로 살 수 있는 수량, 5일 분할 매수표가 만들어집니다.')}
+  ${sec('09', '계좌가 본전이 되는 과정', `
+    ${flow(['팔았던 주식을<br>더 싸게 되사요', '주식 수를 되찾고<br>현금이 남아요', '지금 주식 가치에<br>남은 현금을 더해요'])}
+    <p>이 방법은 돈을 벌기 위한 것이라기보다, <b>하락장에서 덜 잃고 살아남기 위한 고육책</b>입니다.</p>`,
+    '[대시보드]의 "계좌 평가(주식+현금)", "풍차 안 했을 때 대비", "본전 주가"(원래 매입단가 입력 시)에서 확인합니다.')}
+  ${sec('+', '실전 메모와 용어', `
+    <p><b>파란색 칸</b>: 매수 예정가가 최근 종가보다 높아 바로 매수가 가능한 경우입니다. 이때는 계산된 지정가 대신 <b>현재가 부근 지정가</b>로 주문하는 것이 유리합니다. (실전 예시 5회차: 지정가가 모두 전일 종가 48.76보다 높아 48.76에 나눠 주문 → 평균 48.0881 체결)</p>
+    <p><b>15% 이상 급락한 다음 날</b>: 정규장이 상승 출발할 확률이 높다고 보고 프리장에서 매수한 사례가 있습니다. 규칙이 아니라 글쓴이의 개인 판단입니다.</p>
+    <p><b>휴장일·조기폐장</b>: 휴장일에는 MOC 매도가 없으므로 다음 거래일로 넘깁니다. (실전 예시 7회차: 11.26 추수감사절 휴장 → 11.27 매도) 추수감사절 다음 날과 성탄 전날은 뉴욕 13:00에 일찍 마감합니다.</p>
+    <p><b>5주선 / 30주선</b>: 주봉 차트의 5주·30주 이동평균선(최근 5개·30개 주봉 종가의 평균)입니다. 일봉으로는 대략 25일선·150일선에 해당하지만 값이 완전히 같지는 않습니다.</p>
+    <p><b>대응률</b>: 매수5 지정가 ÷ 평균 매도가. 평균 매도가 대비 몇 %까지 하락을 받아낼 수 있는지 보여줍니다. <b>시작가대비</b>: 매수5 지정가 ÷ 1일차 매도가 − 1.</p>
+    <p><b>평균이익률</b>: 엑셀과 같은 단순평균과, 실제 투입금 기준 수익률을 함께 표시합니다.</p>
+    <p class="muted">출처: papas-method.tistory.com (하락장 대처방법 3 · 풍차돌리기). 이 앱은 기록·계산 도구이며 투자 판단은 본인 책임입니다.</p>`, '')}
+  </div>`;
 }
 
 function vSet(it) {
@@ -721,13 +906,19 @@ function vSet(it) {
     ${f('totalQty', '총 보유수량')}${f('coreQty', '코어(계속 보유) 수량')}${f('slots', '슬롯 수')}${f('sellDays', '매도 일수')}
    </div>
    <div class="muted">회차당 수량 <b>${slotQty(it)}주</b> · 하루 매도 <b>${Math.floor(slotQty(it) / num(it.sellDays))}주</b> · 회차당 지정가 주문 ${it.sellDays}개 (가이드: 400주 중 200주 보유, 200주를 100주씩 2슬롯)</div>
-   <div class="row">${f('avgCost', '원래 매입단가 (선택, 본전 계산용)')}${f('minGap', '최소 출발 간격 (거래일)')}</div>
+   <div class="row">${f('avgCost', '원래 매입단가 (선택, 본전 계산용)')}${f('minGap', '같은 날 재매수 완료 시 출발 간격 (거래일)')}</div>
   </div>
   <div class="card"><h3>회차별 매수 간격 (%)</h3>
    <div class="gaps">${gl}</div>
    <div class="row"><button class="btn s g" onclick="A.resetGaps('US')">미국 기본값 (5→2.5)</button><button class="btn s g" onclick="A.resetGaps('KR')">국내 기본값 (3→1.5)</button></div>
    <label><input type="checkbox" ${it.lateEntry ? 'checked' : ''} onchange="A.set('lateEntry',this.checked)"> 하락이 많이 진행된 뒤 늦게 진입 — 처음부터 마지막 간격(${it.gaps[it.gaps.length - 1]}%) 사용</label>
    <div class="muted">국내 기본값은 SOXL(3배 레버리지)보다 변동성이 작은 국내 2배 레버리지·대형 ETF를 고려해 미국 기본값의 약 60%로 잡았습니다. 종목 변동성에 맞게 조정하세요.</div>
+  </div>
+  <div class="card"><h3>휴장일 (${it.market === 'US' ? '미국 NYSE' : '국내 KRX'})</h3>
+   <div class="muted">매도일 생성, 출발 가능일, "다음 거래일" 계산에서 주말과 휴장일을 건너뜁니다. ${it.market === 'US' ? '조기폐장일(뉴욕 13:00 마감)은 종가 확정 시각에 반영됩니다.' : '2027년 국내 휴장일은 정부 월력요항 기준 예상치입니다. 거래소 공지를 확인하세요.'} 지난 휴장일은 시세 조회 때 자동으로 보완됩니다.</div>
+   <div class="muted" style="margin-top:6px"><b>앞으로 90일</b>: ${(() => { const t = today(), e = addDays(t, 90); const m = holMap(it.market); const l = Object.keys(m).filter(d => d >= t && d <= e).map(d => [d, m[d]]); const ea = Object.keys(EARLY[it.market] || {}).filter(d => d >= t && d <= e).map(d => [d, '조기폐장(13시)']); return [...l, ...ea].sort((x, y) => x[0] < y[0] ? -1 : 1).map(x => md(x[0]) + ' ' + x[1]).join(' · ') || '없음'; })()}</div>
+   <div class="row"><label class="f" style="max-width:180px">임시 휴장일 직접 추가<input type="date" id="chDate"></label><button class="btn s" style="align-self:flex-end" onclick="A.addHol()">추가</button></div>
+   <div class="row">${((S.customHol || {})[it.market] || []).map(d => `<span class="badge b-pause">${md(d)} <a href="#" onclick="A.delHol('${d}');return false">✕</a></span>`).join(' ')}</div>
   </div>
   <div class="card"><h3>수수료·세금 (%)</h3>
    <div class="row">${f('buyFee', '매수 수수료 %', 'number', 'step="0.001"')}${f('sellFee', '매도 수수료 %', 'number', 'step="0.001"')}${f('sellTax', '매도 세금 % (국내 주식 거래세 등)', 'number', 'step="0.01"')}</div>
@@ -736,7 +927,7 @@ function vSet(it) {
   <div class="card"><h3>시세 자동조회 (구글 시트 웹앱)</h3>
    <label class="f">웹앱 URL (…/exec)<input type="text" value="${esc(S.webappUrl)}" onchange="A.setUrl(this.value)" placeholder="https://script.google.com/macros/s/…/exec"></label>
    <div class="row"><button class="btn s" onclick="A.refresh()">연결 테스트 / 시세 갱신</button></div>
-   <details class="mini"><summary>Apps Script 코드 보기 · 설치 방법</summary>
+   <details class="mini" data-k="gs"><summary>Apps Script 코드 보기 · 설치 방법</summary>
     <ol class="muted"><li>구글 시트 새로 만들기 → [확장 프로그램] → [Apps Script]</li><li>기존 코드를 지우고 아래 코드 붙여넣기 → 저장</li>
     <li>[배포] → [새 배포] → 유형 <b>웹 앱</b>, 실행: 나, 액세스: <b>모든 사용자</b> → 권한 승인</li><li>웹 앱 URL을 위 칸에 붙여넣기</li></ol>
     <button class="btn s g" onclick="A.copyGs()">코드 복사</button>
@@ -745,7 +936,7 @@ function vSet(it) {
   <div class="card"><h3>데이터</h3>
    <div class="row"><button class="btn s" onclick="A.exportJson()">백업 (JSON 저장)</button>
     <label class="btn s g">복원<input type="file" accept=".json" style="display:none" onchange="A.importJson(this.files[0])"></label>
-    <button class="btn s g" onclick="A.loadExample()">실전 예시 불러오기 (SOXL 1~6회차)</button>
+    <button class="btn s g" onclick="A.loadExample()">실전 예시 불러오기 (SOXL 1~7회차)</button>
     <button class="btn s r" onclick="A.delItem()" style="margin-left:auto">이 종목 삭제</button></div>
    <div class="muted">데이터는 이 기기 브라우저에 자동 저장됩니다. 기기를 바꾸거나 브라우저 데이터를 지우기 전에 백업하세요.</div>
   </div>
@@ -760,6 +951,7 @@ function vSet(it) {
 
 /* ---------- 동작 ---------- */
 const A = {
+  guideAll(v) { document.querySelectorAll('details.gd').forEach(d => d.open = !!v); },
   tab(k) { TAB = k; render(); window.scrollTo(0, 0); },
   open(id) { OPEN[id] = true; render(); },
   toggle(id) { const it = IT(), r = RD(it, id), c = rc(it, r); OPEN[id] = !(OPEN[id] ?? (c.status !== 'done')); render(); },
@@ -786,8 +978,12 @@ const A = {
     const it = IT(), I = ic(it), np = nextPlan(it, I);
     if (np.none) return toast('사용 가능한 슬롯이 없습니다');
     let d = ($('nsDate') || {}).value || today();
-    if (isWknd(d)) d = nextTD(d);
-    if (np.lastStart && !np.initial && tdCount(np.lastStart, d) < num(it.minGap) && !confirm(`직전 출발(${md(np.lastStart)})과 ${tdCount(np.lastStart, d)}거래일 차이입니다. 그래도 출발할까요?`)) return;
+    if (isClosed(d)) { toast(`${md(d)}은 ${holName(d) || '주말'} — 다음 거래일로 출발합니다`); d = nextTD(d); }
+    const v = signals(it).v;
+    const sv = x => x === 'mixed' ? 'SOXX·SOXL(종목·기준지수) 신호가 엇갈립니다' : x == null ? '주봉 신호 데이터가 없습니다' : '';
+    if (np.no === 1 && v.start !== true && !confirm(`시작 신호가 없습니다.\n${sv(v.start) || '주봉 몸통 전체가 30주선 아래인 음봉이 아닙니다'}\n그래도 1회차를 출발할까요?`)) return;
+    if (!np.initial && v.under5 !== true && !confirm(`5주선 아래가 아닙니다.\n${sv(v.under5) || '주봉 종가가 5주선 위입니다 (새 회차 대기)'}\n그래도 ${np.no}회차를 출발할까요?`)) return;
+    if (d < np.earliest && !confirm(`출발 가능일(${md(np.earliest)})보다 이릅니다. 그래도 출발할까요?`)) return;
     const qs = splitQty(slotQty(it), num(it.sellDays));
     const sells = []; let x = d;
     qs.forEach((q, i) => { if (i) x = nextTD(x); sells.push({ d: x, q, p: '' }); });
@@ -800,31 +996,69 @@ const A = {
     const it = IT(), r = RD(it, id);
     const filled = r.orders.some(o => num(o.fq) && num(o.fp));
     if (filled && k !== 'd' && !confirm('이미 재매수 체결이 있는 회차입니다. 매도 기록을 바꿔도 지정가는 다시 계산되지 않습니다. 계속할까요?')) return render();
-    r.sells[i][k] = k === 'd' ? v : (v === '' ? '' : num(v)); render();
+    r.sells[i][k] = k === 'd' ? v : (v === '' ? '' : num(v));
+    if (k !== 'q') r.sells[i].auto = false;
+    render();
+  },
+  addHol() {
+    const d = ($('chDate') || {}).value; if (!d) return toast('날짜를 선택하세요');
+    const it = IT(); S.customHol = S.customHol || {}; const a = new Set(S.customHol[it.market] || []); a.add(d);
+    S.customHol[it.market] = [...a].sort(); HCACHE = {}; toast(md(d) + ' 휴장일 추가'); render();
+  },
+  delHol(d) { const it = IT(); S.customHol[it.market] = (S.customHol[it.market] || []).filter(x => x !== d); HCACHE = {}; render(); },
+  fixDates(id) {
+    const it = IT(), r = RD(it, id);
+    let prev = null;
+    r.sells.forEach((x, i) => {
+      if (!num(x.p)) x.d = i === 0 ? firstTD(x.d) : nextTD(prev);
+      prev = x.d;
+    });
+    toast('휴장일을 건너뛰어 매도일을 다시 잡았습니다'); render();
   },
   addSell(id) { const it = IT(), r = RD(it, id); const l = r.sells[r.sells.length - 1]; r.sells.push({ d: l ? nextTD(l.d) : today(), q: l ? l.q : 0, p: '' }); render(); },
   delSell(id) { const it = IT(), r = RD(it, id); if (r.sells.length > 1) r.sells.pop(); render(); },
   autoFill(id, silent) {
     const it = IT(), r = RD(it, id), q = it.quote;
     if (!q || !q.daily) { if (!silent) toast('시세 데이터가 없습니다. [⟳ 시세]를 먼저 누르세요'); return; }
-    const mp = Object.fromEntries(q.daily.map(d => [d[0], d[4]]));
-    let n = 0; r.sells.forEach(s => { if (!num(s.p) && mp[s.d]) { s.p = mp[s.d]; n++; } });
-    if (!silent) { toast(n ? `${n}일 종가를 채웠습니다` : '채울 종가가 없습니다'); render(); }
+    // 정규장이 끝나 확정된 종가만 사용 (장중 가격은 채우지 않음)
+    const mp = Object.fromEntries(q.daily.filter(d => isFinal(it, d[0])).map(d => [d[0], d[4]]));
+    let n = 0, fixd = 0, wait = 0;
+    r.sells.forEach(s => {
+      const c = mp[s.d];
+      if (!num(s.p)) { if (c) { s.p = c; s.auto = true; n++; } else if (s.d && !isFinal(it, s.d)) wait++; }
+      else if (s.auto && c && Math.abs(num(s.p) - c) > 1e-9) { s.p = c; fixd++; } // 자동으로 채운 값은 확정 종가로 교정
+    });
+    if (!silent) { toast(n || fixd ? `${n}일 종가를 채웠습니다${fixd ? ` · ${fixd}일 확정 종가로 교정` : ''}` : wait ? '아직 장 마감 전이라 확정 종가가 없습니다' : '채울 종가가 없습니다 (휴장일·날짜 확인)'); render(); }
   },
   setOrd(id, i, k, v) {
     const it = IT(), r = RD(it, id), o = r.orders[i];
+    if (k === 'fq' && v !== '' && (!Number.isFinite(num(v)) || num(v) < 0 || num(v) > num(o.qty))) {
+      toast(`체결 수량은 0주부터 주문수량 ${num(o.qty)}주까지 입력할 수 있습니다`); return render();
+    }
     o[k] = k === 'fd' ? v : (v === '' ? '' : num(v));
     if (k === 'fp' && num(v) && !num(o.fq)) o.fq = o.qty;
     if (k === 'fp' && num(v) && !o.fd) o.fd = today();
     if (k === 'fp' && v === '') { o.fq = ''; o.fd = ''; }
+    if (k === 'fq' && num(v) > 0 && !num(o.fp)) { o.fq = ''; toast('체결 수량을 확정하려면 실제 체결가도 입력하세요'); }
     render();
   },
   bulk(id) {
     const it = IT(), r = RD(it, id);
     const d = $('bd_' + id).value, p = num($('bp_' + id).value);
     if (!p) return toast('체결가를 입력하세요');
-    r.orders.forEach(o => { const fq = num(o.fq) && num(o.fp) ? num(o.fq) : 0; const open = num(o.qty) - fq; if (open > 0 && !fq) { o.fd = d; o.fp = p; o.fq = o.qty; } });
-    render(); toast('남은 주문을 일괄 체결 처리했습니다');
+    let filledNow = 0;
+    r.orders.forEach(o => {
+      const oldQ = num(o.fq) && num(o.fp) ? Math.min(num(o.qty), num(o.fq)) : 0;
+      const open = Math.max(0, num(o.qty) - oldQ);
+      if (open > 0) {
+        const oldCost = oldQ * num(o.fp);
+        o.fq = oldQ + open;
+        o.fp = o.fq ? (oldCost + open * p) / o.fq : p;
+        o.fd = d || o.fd || today();
+        filledNow += open;
+      }
+    });
+    render(); toast(filledNow ? `${filledNow}주 잔여 주문을 일괄 체결 처리했습니다` : '체결할 잔여 수량이 없습니다');
   },
   recover(id) {
     const it = IT(), r = RD(it, id), c = rc(it, r);
@@ -839,7 +1073,7 @@ const A = {
         if (need <= 0) break;
         const filled = num(o.fq) && num(o.fp) ? num(o.fq) : 0;
         const open = num(o.qty) - filled;
-        if (open <= 0 || filled) continue;
+        if (open <= 0) continue;
         const take = Math.min(open, need);
         o.qty = num(o.qty) - take; need -= take;
       }
@@ -854,24 +1088,30 @@ const A = {
     const it = IT(), I = ic(it);
     if (!I.price) return toast('현재가가 필요합니다');
     if (!confirm('풍차를 종료(STOP)할까요?\n진행 중인 회차의 남은 매도·매수 주문을 모두 멈추고, 미회수 수량 + 차익금으로 5거래일 분할 매수 계획을 만듭니다.')) return;
-    it.rounds.forEach((r, k) => { const s = I.rcs[k].status; if (s !== 'done') { r.stopped = true; r.sells = r.sells.filter(x => num(x.p)); } });
+    it.rounds.forEach((r, k) => { const s = I.rcs[k].status; if (s !== 'done') { r.stopped = true; r.sellsBak = r.sells.map(x => ({ ...x })); r.sells = r.sells.filter(x => num(x.p)); } });
     const I2 = ic(it), { bf } = fees(it);
-    const total = Math.floor(I2.cash / (I2.price * (1 + bf)));
-    it.stopPlan = { date: today(), price: I2.price, unrec: I2.unrec, cash: I2.cash, total };
-    let d = isWknd(today()) ? nextTD(today()) : today();
-    it.stopBuys = splitQty(Math.max(0, total), num(it.sellDays)).map((q, i) => { if (i) d = nextTD(d); return { d, q, p: '' }; });
+    const unitCost = I2.price * (1 + bf);
+    const mandatory = Math.max(0, Math.ceil(I2.unrec));
+    const reserve = mandatory * unitCost;
+    const extra = unitCost > 0 ? Math.max(0, Math.floor((I2.cash - reserve) / unitCost)) : 0;
+    const total = mandatory + extra;
+    const shortfall = Math.max(0, reserve - I2.cash);
+    it.stopPlan = { date: today(), price: I2.price, unrec: mandatory, cash: I2.cash, total, extra, shortfall, reserve };
+    let d = firstTD(today());
+    const days = Math.max(1, Math.floor(num(it.sellDays) || 5));
+    it.stopBuys = splitQty(total, days).map((q, i) => { if (i) d = nextTD(d); return { d, q, p: '' }; });
     it.stopped = true; TAB = 'dash'; render();
   },
-  undoStop() { const it = IT(); if (!confirm('STOP을 취소하고 회차를 다시 진행 상태로 돌릴까요?')) return; it.stopped = false; it.stopBuys = []; it.stopPlan = null; it.rounds.forEach(r => r.stopped = false); render(); },
+  undoStop() { const it = IT(); if (!confirm('STOP을 취소하고 회차를 다시 진행 상태로 돌릴까요?')) return; it.stopped = false; it.stopBuys = []; it.stopPlan = null; it.rounds.forEach(r => { r.stopped = false; if (r.sellsBak) { r.sells = r.sellsBak; delete r.sellsBak; } }); render(); },
   setStop(i, k, v) { IT().stopBuys[i][k] = k === 'd' ? v : num(v); render(); },
 
-  async refresh() {
+  async refresh(silent = false) {
     const it = IT();
-    if (!S.webappUrl) { toast('[설정]에서 웹앱 URL을 먼저 입력하세요'); TAB = 'set'; render(); return; }
+    if (!S.webappUrl) { if (!silent) { toast('[설정]에서 웹앱 URL을 먼저 입력하세요'); TAB = 'set'; render(); } return; }
     const pre = it.market === 'KR' ? 'KR:' : 'US:';
     const syms = [it.ticker, it.indexTicker].filter(Boolean).map(s => pre + s.trim().toUpperCase());
-    if (!syms.length) return toast('티커를 입력하세요');
-    toast('시세 불러오는 중…');
+    if (!syms.length) { if (!silent) toast('티커를 입력하세요'); return; }
+    if (!silent) toast('시세 불러오는 중…');
     try {
       const res = await fetch(S.webappUrl + (S.webappUrl.includes('?') ? '&' : '?') + 'symbols=' + encodeURIComponent(syms.join(',')));
       const j = await res.json();
@@ -880,10 +1120,13 @@ const A = {
       const errs = [];
       if (t && t.ok) it.quote = { price: t.price, daily: t.daily, name: t.name, src: t.source, at }; else errs.push(syms[0] + ': ' + (t ? t.error : '응답 없음'));
       if (syms[1]) { if (ix && ix.ok) it.idxQuote = { price: ix.price, daily: ix.daily, name: ix.name, src: ix.source, at }; else errs.push(syms[1] + ': ' + (ix ? ix.error : '응답 없음')); }
+      learnHolidays(it);
       it.rounds.forEach(r => { if (!r.stopped) A.autoFill(r.id, true); });
-      render();
-      toast(errs.length ? '일부 실패 — ' + errs.join(' / ') : '시세 갱신 완료');
-    } catch (e) { toast('조회 실패: ' + e.message + ' — 직접 입력을 사용하세요'); }
+      LAST_REF = Date.now();
+      if (silent && editing()) PEND = true; else render(); // 입력 중이면 끝난 뒤 다시 그림
+      if (!silent) toast(errs.length ? '일부 실패 — ' + errs.join(' / ') : '시세 갱신 완료');
+      else if (errs.length) console.warn('시세 자동 갱신 일부 실패:', errs.join(' / '));
+    } catch (e) { if (!silent) toast('조회 실패: ' + e.message + ' — 직접 입력을 사용하세요'); else console.warn('시세 자동 갱신 실패:', e); }
   },
   copyGs() { navigator.clipboard.writeText($('gsCode').textContent).then(() => toast('코드를 복사했습니다'), () => toast('복사 실패 — 직접 선택해 복사하세요')); },
   exportJson() {
@@ -899,6 +1142,7 @@ const A = {
   loadExample() {
     if (!confirm('SOXL 실전 예시(1,600주 중 800주, 회차당 400주) 종목을 새로 추가할까요?')) return;
     const it = newItem({ name: 'SOXL 실전예시', ticker: 'SOXL', indexTicker: 'SOXX', totalQty: 1600, coreQty: 800, slots: 2 });
+    MK = 'US';
     const mk = (no, slot, d0, sells, fills, gap) => {
       const sd = []; let d = d0; sells.forEach((p, i) => { if (i) d = nextTD(d); sd.push({ d, q: 80, p }); });
       const r = { id: uid(), no, slot, gap, sells: sd, orders: [], extras: [], paused: false, stopped: false, placedDate: '' };
@@ -913,7 +1157,8 @@ const A = {
       mk(3, 1, '2026-11-02', [68.17, 73.12, 66.68, 40.87, 45.97], [['2026-11-09', 48.12], ['2026-11-09', 48.12], ['2026-11-09', 48.12], ['2026-11-09', 48.12], ['2026-11-09', 48.08]], 4),
       mk(4, 2, '2026-11-03', [73.12, 66.68, 40.87, 45.97, 56.20], [['2026-11-10', 52.99], ['2026-11-10', 52.68], ['2026-11-16', 50.11], ['2026-11-16', 49.05], ['2026-11-16', 47.34]], 3.5),
       mk(5, 1, '2026-11-10', [56.06, 66.03, 65.53, 58.32, 48.76], Array(5).fill(['2026-11-17', 48.0881]), 3),
-      mk(6, 2, '2026-11-17', [49.07, '', '', '', ''], null, 2.5)
+      mk(6, 2, '2026-11-17', [49.07, 49.26, 45.30, 30.88, 43.21], null, 2.5),
+      mk(7, 1, '2026-11-20', [30.88, 43.21, '', '', ''], null, 2.5) // 11.26 추수감사절 휴장 → 11.27
     ];
     // 4회차 매도일: 11.03~11.06, 11.09 (주말 건너뜀)
     S.items.push(it); S.active = it.id; TAB = 'rounds'; render(); toast('실전 예시를 불러왔습니다');
@@ -921,6 +1166,12 @@ const A = {
 };
 
 render();
+// 웹앱 URL이 설정된 경우 최초 실행 후 시세를 조회하고 5분마다 자동 갱신합니다.
+if (S.webappUrl) setTimeout(() => A.refresh(true), 800);
+// 화면이 보일 때만 5분마다 갱신. 입력 중에는 화면을 다시 그리지 않고 입력이 끝난 뒤 반영합니다.
+setInterval(() => { if (S.webappUrl && !document.hidden) A.refresh(true); }, 5 * 60 * 1000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden && S.webappUrl && Date.now() - LAST_REF > 5 * 60 * 1000) A.refresh(true); });
+document.addEventListener('focusout', () => setTimeout(() => { if (PEND && !editing()) { PEND = false; render(); } }, 400));
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => { });
 </script>
 </body>
