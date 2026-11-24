@@ -22,7 +22,7 @@ header select,header button{font-size:13px;border-radius:8px;border:0;padding:6p
 header button{background:#fff2;color:#fff;cursor:pointer}
 .hprice{font-size:12px;opacity:.9;margin-top:4px}
 nav{display:flex;background:#fff;border-bottom:1px solid var(--line)}
-nav button{flex:1;border:0;background:none;padding:11px 4px;font-size:14px;color:var(--sub);border-bottom:3px solid transparent;cursor:pointer}
+nav button{flex:1;border:0;background:none;padding:11px 2px;font-size:13px;white-space:nowrap;color:var(--sub);border-bottom:3px solid transparent;cursor:pointer}
 nav button.on{color:var(--pri);font-weight:700;border-color:var(--pri)}
 main{padding:12px;max-width:1180px;margin:0 auto;padding-bottom:60px}
 .card{background:var(--card);border-radius:12px;padding:12px;margin-bottom:12px;box-shadow:0 1px 3px #0001}
@@ -113,38 +113,40 @@ table.gt.c th,table.gt.c td{text-align:center;width:auto}
 function doGet(e) {
   var p = (e && e.parameter) || {};
   var raw = p.symbols || p.symbol || '';
+  var range = p.range === 'max' ? 'max' : '1y'; // range=max: 상장 이후 전체 (백테스트용)
   var out = { ok: true, time: new Date().toISOString(), data: {} };
   if (!raw) { out.ok = false; out.error = '사용법: ?symbols=US:SOXL,KR:122630'; return json_(out); }
   raw.split(',').map(function (s) { return s.trim(); }).filter(String).forEach(function (sym) {
-    try { out.data[sym] = getSymbol_(sym); } catch (err) { out.data[sym] = { ok: false, error: String(err) }; }
+    try { out.data[sym] = getSymbol_(sym, range); } catch (err) { out.data[sym] = { ok: false, error: String(err) }; }
   });
   return json_(out);
 }
 function json_(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
 }
-function getSymbol_(sym) {
+function getSymbol_(sym, range) {
+  range = range || '1y';
   var cache = CacheService.getScriptCache();
-  var hit = cache.get('wm_' + sym);
+  var hit = cache.get('wm_' + range + '_' + sym);
   if (hit) return JSON.parse(hit);
   var parts = sym.split(':');
   var market = parts.length > 1 ? parts[0].toUpperCase() : 'US';
   var code = parts.length > 1 ? parts[1] : parts[0];
   var res = null, errs = [];
   if (market === 'KR') {
-    try { res = naver_(code); } catch (e1) { errs.push('naver: ' + e1); }
-    if (!res) { try { res = yahoo_(code + '.KS'); } catch (e2) { errs.push('yahoo.KS: ' + e2); } }
-    if (!res) { try { res = yahoo_(code + '.KQ'); } catch (e3) { errs.push('yahoo.KQ: ' + e3); } }
+    try { res = naver_(code, range); } catch (e1) { errs.push('naver: ' + e1); }
+    if (!res) { try { res = yahoo_(code + '.KS', range); } catch (e2) { errs.push('yahoo.KS: ' + e2); } }
+    if (!res) { try { res = yahoo_(code + '.KQ', range); } catch (e3) { errs.push('yahoo.KQ: ' + e3); } }
   } else {
-    try { res = yahoo_(code); } catch (e4) { errs.push('yahoo: ' + e4); }
+    try { res = yahoo_(code, range); } catch (e4) { errs.push('yahoo: ' + e4); }
   }
   if (!res) throw new Error(errs.join(' / '));
   res.ok = true; res.symbol = sym; res.market = market;
-  try { cache.put('wm_' + sym, JSON.stringify(res), 300); } catch (e5) {}
+  try { cache.put('wm_' + range + '_' + sym, JSON.stringify(res), 300); } catch (e5) {}
   return res;
 }
-function yahoo_(ticker) {
-  var url = 'https://query1.finance.yahoo.com/v8/finance/chart/' + encodeURIComponent(ticker) + '?range=1y&interval=1d&includePrePost=false';
+function yahoo_(ticker, range) {
+  var url = 'https://query1.finance.yahoo.com/v8/finance/chart/' + encodeURIComponent(ticker) + (range === 'max' ? '?period1=0&period2=' + Math.floor(Date.now() / 1000) : '?range=1y') + '&interval=1d&includePrePost=false'; // range=max는 월봉으로 바뀌므로 기간을 직접 지정
   var r = UrlFetchApp.fetch(url, { muteHttpExceptions: true, headers: { 'User-Agent': 'Mozilla/5.0' } });
   if (r.getResponseCode() !== 200) throw new Error('HTTP ' + r.getResponseCode());
   var j = JSON.parse(r.getContentText());
@@ -159,11 +161,11 @@ function yahoo_(ticker) {
     if (daily.length && daily[daily.length - 1][0] === d) daily.pop();
     daily.push([d, r4_(o), r4_(h), r4_(l), r4_(c)]);
   }
-  return { source: 'yahoo', name: meta.shortName || meta.symbol || ticker, currency: meta.currency || '',
+  return { source: 'yahoo', granularity: meta.dataGranularity || '', name: meta.shortName || meta.symbol || ticker, currency: meta.currency || '',
     price: meta.regularMarketPrice != null ? r4_(meta.regularMarketPrice) : (daily.length ? daily[daily.length - 1][4] : null), daily: daily };
 }
-function naver_(code) {
-  var url = 'https://fchart.stock.naver.com/sise.nhn?symbol=' + encodeURIComponent(code) + '&timeframe=day&count=300&requestType=0';
+function naver_(code, range) {
+  var url = 'https://fchart.stock.naver.com/sise.nhn?symbol=' + encodeURIComponent(code) + '&timeframe=day&count=' + (range === 'max' ? 10000 : 300) + '&requestType=0';
   var r = UrlFetchApp.fetch(url, { muteHttpExceptions: true, headers: { 'User-Agent': 'Mozilla/5.0' } });
   if (r.getResponseCode() !== 200) throw new Error('HTTP ' + r.getResponseCode());
   var txt = r.getContentText('EUC-KR');
@@ -187,7 +189,7 @@ function test() {
 <script>
 'use strict';
 /* =========================================================
-   풍차돌리기 매니저 v1.3
+   풍차돌리기 매니저 v1.5
    - 하락장 대처법 풍차돌리기 (분할 MOC 매도 → 등비 지정가 재매수)
    ========================================================= */
 const KEY = 'windmill_mgr_v1';
@@ -534,10 +536,10 @@ function render() {
     const x = a / b - 1; chg = ` <b class="${cls(x)}" style="color:${x < 0 ? '#bcd7ff' : '#ffd0d0'}">${(x * 100).toFixed(2)}%</b>`;
   }
   $('hprice').innerHTML = p ? `현재가 <b>${fp(it, p)}</b>${chg} · ${it.useManual ? '수동가격' : (q ? '갱신 ' + esc(q.at || '') : '수동가격')}` : '현재가 없음 — [⟳ 시세] 또는 [신호] 탭에서 직접 입력';
-  const tabs = [['dash', '대시보드'], ['rounds', '회차'], ['signal', '신호'], ['guide', '설명서'], ['set', '설정']];
+  const tabs = [['dash', '대시보드'], ['rounds', '회차'], ['signal', '신호'], ['bt', '백테스트'], ['guide', '설명서'], ['set', '설정']];
   $('tabs').innerHTML = tabs.map(([k, l]) => `<button class="${TAB === k ? 'on' : ''}" onclick="A.tab('${k}')">${l}</button>`).join('');
   const I = ic(it);
-  const v = { dash: vDash, rounds: vRounds, signal: vSignal, guide: vGuide, set: vSet }[TAB];
+  const v = { dash: vDash, rounds: vRounds, signal: vSignal, bt: vBacktest, guide: vGuide, set: vSet }[TAB];
   document.querySelectorAll('#app details[data-k]').forEach(d => DOPEN[d.dataset.k] = d.open);
   $('app').innerHTML = v(it, I);
   document.querySelectorAll('#app details[data-k]').forEach(d => { if (d.dataset.k in DOPEN) d.open = DOPEN[d.dataset.k]; });
@@ -946,7 +948,8 @@ function vSet(it) {
    <li>5일 매도가 끝나면 평균 매도가 기준 지정가 5개가 자동 생성 → 증권사에 기간잔량 지정가로 주문</li>
    <li>다음 주에 2회차 출발. 3회차부터는 재매수가 먼저 끝난 슬롯으로, 5주선 아래일 때 출발</li>
    <li>5주선 회복 → 50%까지 채우고 대기 / 재이탈 → 남은 주문 재개</li>
-   <li>주봉 몸통 전체가 30주선 위 안착 → STOP: 미회수 수량 + 차익금으로 5거래일 분할 종가 매수</li></ol></div>`;
+   <li>주봉 몸통 전체가 30주선 위 안착 → STOP: 미회수 수량 + 차익금으로 5거래일 분할 종가 매수</li>
+   <li>[백테스트] 탭에서 과거 데이터로 조건을 바꿔 가며 미리 시험해 볼 수 있습니다 (미국·국내 모두)</li></ol></div>`;
 }
 
 /* ---------- 동작 ---------- */
@@ -1164,6 +1167,394 @@ const A = {
     S.items.push(it); S.active = it.id; TAB = 'rounds'; render(); toast('실전 예시를 불러왔습니다');
   }
 };
+
+/* =========================================================
+   백테스트 — 앱과 같은 규칙을 과거 일봉에 적용
+   - MOC 매도 = 그날 종가 / 지정가 매수 = 시가가 지정가 이하면 시가, 저가가 지정가 이하면 지정가에 체결
+   - 주봉 신호는 주 마지막 거래일 종가 확정 후 다음 거래일부터 적용
+   ========================================================= */
+const BTD = { t: null, i: null, key: '', src: '', at: '' };
+let BTR = null, BTB = null;
+try { const c = JSON.parse(localStorage.getItem('wm_btd') || 'null'); if (c && c.t) Object.assign(BTD, c); } catch (e) { }
+const BT_PRE = {
+  US: [
+    { n: '전체 기간', s: '2000-01-01', e: '2099-12-31' },
+    { n: '2011 유럽 재정위기', s: '2011-04-01', e: '2012-03-31' },
+    { n: '2015~16 반도체 조정', s: '2015-05-01', e: '2016-06-30' },
+    { n: '2018 하반기 하락', s: '2018-06-01', e: '2019-06-30' },
+    { n: '2020 코로나 폭락', s: '2020-01-15', e: '2020-08-31' },
+    { n: '2022 반도체 하락장', s: '2021-11-01', e: '2023-06-30' },
+    { n: '2024~25 조정·관세 급락', s: '2024-07-01', e: '2025-09-30' },
+    { n: '2026 하반기', s: '2026-07-01', e: '2099-12-31' }
+  ],
+  KR: [
+    { n: '전체 기간', s: '2000-01-01', e: '2099-12-31' },
+    { n: '2011 유럽 재정위기', s: '2011-07-01', e: '2012-06-30' },
+    { n: '2018 하락장', s: '2018-01-15', e: '2019-06-30' },
+    { n: '2020 코로나 폭락', s: '2020-01-15', e: '2020-08-31' },
+    { n: '2021~22 하락장', s: '2021-07-01', e: '2023-03-31' },
+    { n: '2024 하반기 하락', s: '2024-07-01', e: '2025-04-30' },
+    { n: '2026 하반기', s: '2026-07-01', e: '2099-12-31' }
+  ]
+};
+/* 데이터가 일봉인지 검사: 최근 200개 봉 간격의 중앙값(일) */
+function dataGap(a) {
+  if (!a || a.length < 3) return 0;
+  const b = a.slice(-200), g = [];
+  for (let k = 1; k < b.length; k++) g.push((dObj(b[k][0]) - dObj(b[k - 1][0])) / 864e5);
+  g.sort((x, y) => x - y); return g[Math.floor(g.length / 2)];
+}
+function btDefaults(it) {
+  return {
+    market: it.market, krType: it.krType, ticker: it.ticker, indexTicker: it.indexTicker,
+    totalQty: it.totalQty, coreQty: it.coreQty, slots: it.slots, sellDays: it.sellDays,
+    gaps: it.gaps.slice(), lateEntry: false, buyFee: it.buyFee, sellFee: it.sellFee, sellTax: it.sellTax, minGap: it.minGap,
+    preset: 0, start: '2000-01-01', end: '2099-12-31', mix: 'both', startMode: 'signal', useRec5: true, useStop: true, compare: true
+  };
+}
+function BTP() { if (!S.bt) S.bt = btDefaults(IT()); return S.bt; }
+
+function btRun(P, T, X, opt = {}) {
+  const mul = opt.mul || 1;
+  const gaps = P.gaps.map(g => Math.round(num(g) * mul * 1000) / 1000);
+  const bf = num(P.buyFee) / 100, sf = (num(P.sellFee) + num(P.sellTax)) / 100;
+  const nDays = Math.max(1, Math.floor(num(P.sellDays) || 5));
+  const slots = Math.max(1, Math.floor(num(P.slots) || 2));
+  const total0 = Math.floor(num(P.totalQty));
+  const coreRatio = total0 ? num(P.coreQty) / total0 : 0.5;
+  const pit = { market: P.market, krType: P.krType };
+  if (!T || T.length < 40) return { err: '데이터가 부족합니다' };
+  const gT = dataGap(T), gX = X && X.length ? dataGap(X) : 0;
+  if (gT > 4 || gX > 4) return { err: `일봉 데이터가 아닙니다 (봉 간격 약 ${Math.round(Math.max(gT, gX))}일 — 월봉·분기봉으로 받아짐). [설정] 탭의 Apps Script 코드를 새로 복사해 '새 버전'으로 재배포한 뒤 데이터를 다시 불러오세요.` };
+  const s0 = T.findIndex(x => x[0] >= P.start);
+  let e0 = -1; for (let k = T.length - 1; k >= 0; k--) if (T[k][0] <= P.end) { e0 = k; break; }
+  if (s0 < 0 || e0 <= s0) return { err: '이 기간에 데이터가 없습니다' };
+  if (Math.floor((total0 - Math.round(total0 * coreRatio)) / slots) < nDays) return { err: '회차당 수량이 매도 일수보다 작습니다' };
+
+  const wT = weekly(T), tMap = new Map(wT.map(w => [w.k, w]));
+  const wX = X && X.length ? weekly(X) : null, xMap = wX ? new Map(wX.map(w => [w.k, w])) : null;
+  const comb = k => {
+    const jt = judge(tMap.get(k)); if (!jt) return null;
+    const jx = xMap ? judge(xMap.get(k)) : null;
+    if (!jx || P.mix === 'ticker') return jt;
+    if (P.mix === 'index') return jx;
+    const o = {}; ['start', 'stop', 'rec5', 'under5'].forEach(q => o[q] = !!(jt[q] && jx[q])); return o;
+  };
+  const R = [], cycles = [], eq = [], ev = [], weeks = [];
+  let hold = total0, cash = 0, sig = null, cyc = null, stopBuy = null, noSeq = 0, maxUnrec = 0, minCash = 0;
+  // 시작 직전에 확정된 주봉 신호
+  const k0 = monday(T[s0][0]);
+  for (let k = wT.length - 1; k >= 0; k--) if (wT[k].k < k0) { sig = comb(wT[k].k); break; }
+  let pendStart = P.startMode === 'immediate' ? s0 : (sig && sig.start ? s0 : -1);
+  const bought = r => r.orders.reduce((a, o) => a + o.fq, 0) + r.extras.reduce((a, e) => a + e.q, 0);
+
+  const createRound = (i, slot, srcDone) => {
+    const cn = cyc.rounds.length + 1;
+    const gap = P.lateEntry ? gaps[gaps.length - 1] : gaps[Math.min(cn - 1, gaps.length - 1)];
+    const r = { no: ++noSeq, cyc: cycles.length, cn, slot, gap, startIdx: i, sells: splitQty(cyc.slotQ, nDays).map((q, k) => ({ idx: i + k, q, p: null })), sold: 0, amt: 0, avg: 0, orders: [], extras: [], activeFrom: null, paused: false, rec5Pend: false, doneIdx: null, srcDone, stopped: false };
+    R.push(r); cyc.rounds.push(r);
+  };
+  const startCycle = i => {
+    const core = Math.round(hold * coreRatio);
+    cyc = { startIdx: i, total: hold, core, slotQ: Math.floor((hold - core) / slots), rounds: [], stopIdx: null, endIdx: null };
+    cycles.push(cyc); ev.push({ i, t: `풍차 시작 (${hold}주 중 ${hold - core}주 운용)` });
+    createRound(i, 1, null);
+  };
+  const tryStart = i => {
+    const cr = cyc.rounds;
+    if (cr.length < slots) { // 1회차 첫 주, 2회차 다음 주 …
+      if (monday(T[i][0]) > monday(T[cr[cr.length - 1].startIdx][0])) createRound(i, cr.length + 1, null);
+      return;
+    }
+    if (!sig || !sig.under5) return; // 3회차부터: 재매수 완료 + 5주선 아래
+    const frees = [];
+    for (let s = 1; s <= slots; s++) { const l = cr.filter(r => r.slot === s).pop(); if (l && l.doneIdx != null && l.doneIdx < i) frees.push(l); }
+    frees.sort((a, b) => a.doneIdx - b.doneIdx);
+    for (const l of frees) {
+      const sib = cr.find(r => r.srcDone != null && r.srcDone === l.doneIdx);
+      if (sib && i < sib.startIdx + num(P.minGap)) continue; // 같은 날 완료 → 2~3일 차이
+      createRound(i, l.slot, l.doneIdx); break;
+    }
+  };
+  const doStop = i => {
+    cyc.stopped = true; cyc.stopIdx = i;
+    let unrec = 0;
+    cyc.rounds.forEach(r => { if (r.doneIdx == null) r.stopped = true; unrec += r.sold - bought(r); });
+    const px = T[i][4] * (1 + bf);
+    const extra = Math.max(0, Math.floor((cash - unrec * px) / px));
+    const idxs = []; for (let k = i + 1; k <= Math.min(e0, i + nDays); k++) idxs.push(k);
+    ev.push({ i, t: `STOP 신호 — 미회수 ${unrec}주 + 추가 ${extra}주 매수 예정` });
+    if (idxs.length) stopBuy = { idxs, qtys: splitQty(unrec + extra, idxs.length) };
+    else { cyc.endIdx = i; cyc = null; }
+  };
+
+  for (let i = s0; i <= e0; i++) {
+    const [d, o, , l, c] = T[i];
+    // STOP 분할 종가 매수
+    if (stopBuy) {
+      const k = stopBuy.idxs.indexOf(i);
+      if (k >= 0) { const q = stopBuy.qtys[k]; hold += q; cash -= q * c * (1 + bf); }
+      if (i >= stopBuy.idxs[stopBuy.idxs.length - 1]) { cyc.endIdx = i; ev.push({ i, t: `STOP 매수 완료 — 보유 ${hold}주` }); cyc = null; stopBuy = null; }
+    }
+    // 회차 출발
+    if (cyc && !cyc.stopped) tryStart(i);
+    else if (!cyc && !stopBuy && pendStart === i) startCycle(i);
+    if (cyc && !cyc.stopped) {
+      // 5주선 회복: 다음 거래일 시가로 50%까지 채우고 대기
+      for (const r of cyc.rounds) if (r.rec5Pend) {
+        r.rec5Pend = false;
+        let need = Math.ceil(r.sold / 2) - bought(r);
+        if (need > 0) {
+          hold += need; cash -= need * o * (1 + bf); r.extras.push({ i, q: need, p: o });
+          for (const od of r.orders) { if (need <= 0) break; const op = od.qty - od.fq; if (op <= 0) continue; const t = Math.min(op, need); od.qty -= t; need -= t; }
+        }
+        if (bought(r) >= r.sold) r.doneIdx = i; else r.paused = true;
+      }
+      // 지정가 체결
+      for (const r of cyc.rounds) {
+        if (r.stopped || r.paused || r.doneIdx != null || r.activeFrom == null || r.activeFrom > i) continue;
+        for (const od of r.orders) {
+          const op = od.qty - od.fq; if (op <= 0) continue;
+          const px = o <= od.limit ? o : (l <= od.limit ? od.limit : null);
+          if (px != null) { od.fq += op; od.cost += op * px; od.fd = i; hold += op; cash -= op * px * (1 + bf); }
+        }
+        if (bought(r) >= r.sold) r.doneIdx = i;
+      }
+      // MOC 매도
+      for (const r of cyc.rounds) {
+        if (r.stopped) continue;
+        for (const s of r.sells) if (s.idx === i) { s.p = c; r.sold += s.q; r.amt += s.q * c; hold -= s.q; cash += s.q * c * (1 - sf); }
+        if (r.sells[r.sells.length - 1].idx === i) {
+          r.avg = r.amt / r.sold;
+          r.orders = splitQty(r.sold, r.sells.length).map((q, k) => ({ n: k + 1, limit: rp(pit, r.avg * Math.pow(1 - r.gap / 100, k + 1)), qty: q, fq: 0, cost: 0, fd: null }));
+          r.activeFrom = i + 1;
+        }
+      }
+    }
+    const un = cyc ? cyc.rounds.reduce((a, r) => a + r.sold - bought(r), 0) : 0;
+    maxUnrec = Math.max(maxUnrec, un); minCash = Math.min(minCash, cash);
+    eq.push([d, hold * c + cash, total0 * c, cyc ? 1 : 0]);
+    // 주 마감 → 신호 확정 (다음 거래일부터 적용)
+    if (i < T.length - 1 && monday(T[i + 1][0]) !== monday(d)) {
+      sig = comb(monday(d));
+      { const k = monday(d), wt = tMap.get(k), wx = xMap ? xMap.get(k) : null;
+        weeks.push({ k, d, t: wt, jt: judge(wt), x: wx, jx: wx ? judge(wx) : null, s: sig, running: !!cyc && !cyc.stopped }); }
+      if (!cyc && !stopBuy) { if (sig && sig.start) pendStart = i + 1; }
+      else if (cyc && !cyc.stopped && sig) {
+        if (P.useStop && sig.stop) doStop(i);
+        else {
+          if (P.useRec5 && sig.rec5) cyc.rounds.forEach(r => { if (r.activeFrom != null && r.doneIdx == null && !r.paused && !r.stopped) r.rec5Pend = true; });
+          if (sig.under5) cyc.rounds.forEach(r => { if (r.paused) r.paused = false; });
+        }
+      }
+    }
+  }
+  const P0 = T[s0][4], P1 = T[e0][4], init = total0 * P0, fin = hold * P1 + cash, bhFin = total0 * P1;
+  const mdd = k => { let pk = -Infinity, m = 0; eq.forEach(x => { pk = Math.max(pk, x[k]); m = Math.min(m, x[k] / pk - 1); }); return m; };
+  R.forEach(r => {
+    const an = r.avg * (1 - sf);
+    r.profit = r.orders.reduce((a, od) => a + od.fq * an - od.cost * (1 + bf), 0) + r.extras.reduce((a, e) => a + e.q * (an - e.p * (1 + bf)), 0);
+    r.status = r.doneIdx != null ? 'done' : r.stopped ? 'stopped' : r.activeFrom == null ? 'selling' : r.paused ? 'paused' : 'buying';
+    r.got = bought(r);
+  });
+  return {
+    d0: T[s0][0], d1: T[e0][0], s0, e0, init, fin, bhFin, retS: fin / init - 1, retB: bhFin / init - 1,
+    hold, cash, total0, mddS: mdd(1), mddB: mdd(2), rounds: R, cycles, ev, eq, maxUnrec, minCash, T, gaps, weeks, hasX: !!xMap
+  };
+}
+
+/* ---- CSV 불러오기 (야후·인베스팅 등) ---- */
+function parseCsv(text) {
+  const lines = text.replace(/\r/g, '').split('\n').filter(x => x.trim());
+  if (lines.length < 2) return null;
+  const split = ln => { const o = []; let cur = '', q = false; for (const ch of ln) { if (ch === '"') q = !q; else if (ch === ',' && !q) { o.push(cur); cur = ''; } else cur += ch; } o.push(cur); return o.map(x => x.trim()); };
+  const hd = split(lines[0]).map(x => x.toLowerCase().replace(/[^a-z가-힣 ]/g, '').trim());
+  const find = keys => hd.findIndex(h => keys.some(k => h === k || h.startsWith(k)));
+  const iD = find(['date', '날짜', '일자']), iO = find(['open', '시가']), iH = find(['high', '고가']), iL = find(['low', '저가']);
+  let iC = hd.findIndex(h => h === 'close' || h === '종가'); if (iC < 0) iC = find(['price', 'close', '종가', '현재가']);
+  if (iD < 0 || iC < 0) return null;
+  const nd = s => { let m = s.match(/(\d{4})\D+(\d{1,2})\D+(\d{1,2})/); if (m) return `${m[1]}-${pad(+m[2])}-${pad(+m[3])}`; m = s.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/); if (m) return `${m[3]}-${pad(+m[1])}-${pad(+m[2])}`; m = s.match(/^(\d{4})(\d{2})(\d{2})$/); return m ? `${m[1]}-${m[2]}-${m[3]}` : null; };
+  const rows = [];
+  for (const ln of lines.slice(1)) {
+    const f = split(ln), d = nd(f[iD] || ''), c = num(f[iC]);
+    if (!d || !c) continue;
+    const o = iO >= 0 ? num(f[iO]) || c : c, h = iH >= 0 ? num(f[iH]) || c : c, l = iL >= 0 ? num(f[iL]) || c : c;
+    rows.push([d, o, Math.max(h, o, c), Math.min(l, o, c), c]);
+  }
+  rows.sort((a, b) => a[0] < b[0] ? -1 : 1);
+  return rows.filter((x, k) => !k || x[0] !== rows[k - 1][0]);
+}
+
+/* ---- 화면 ---- */
+function btChart(res) {
+  const e = res.eq, step = Math.max(1, Math.ceil(e.length / 600)), d = e.filter((_, k) => k % step === 0 || k === e.length - 1);
+  const W = 640, H = 240, P = 8;
+  const vals = d.flatMap(x => [x[1], x[2]]).filter(v => v > 0);
+  const mx = Math.max(...vals), mn = Math.min(...vals), lg = mx / mn > 15;
+  const f = v => lg ? Math.log(Math.max(v, mn)) : v, fmx = f(mx), fmn = f(mn);
+  const y = v => P + (H - 2 * P) * (1 - (f(v) - fmn) / (fmx - fmn || 1));
+  const x = k => P + (W - 2 * P) * k / Math.max(1, d.length - 1);
+  let s = '';
+  let st = null; d.forEach((p, k) => { if (p[3] && st == null) st = k; if ((!p[3] || k === d.length - 1) && st != null) { s += `<rect x="${x(st)}" y="${P}" width="${Math.max(1, x(k) - x(st))}" height="${H - 2 * P}" fill="#ffb54733"/>`; st = null; } });
+  const line = (k, col) => `<polyline points="${d.map((p, i) => `${x(i).toFixed(1)},${y(p[k]).toFixed(1)}`).join(' ')}" fill="none" stroke="${col}" stroke-width="1.8"/>`;
+  s += line(2, '#8a93a3') + line(1, '#d23c3c');
+  return `<div class="muted" style="margin-bottom:4px"><b style="color:#d23c3c">━ 풍차 (주식+현금)</b> · <b style="color:#8a93a3">━ 그냥 보유</b> · <b style="color:#c98a00">▮ 풍차 진행 구간</b>${lg ? ' · 로그 눈금' : ''}</div><svg class="ch" viewBox="0 0 ${W} ${H}">${s}</svg>`;
+}
+function btSummary(P, res, title) {
+  const it = { market: P.market, krType: P.krType };
+  const dShares = res.hold - res.total0, ex = res.retS - res.retB;
+  const done = res.rounds.filter(r => r.status === 'done').length;
+  return `<div class="grid">
+    <div class="kpi"><div class="l">기간</div><div class="v" style="font-size:13px">${res.d0} ~ ${res.d1}</div><div class="s">${title || ''}</div></div>
+    <div class="kpi"><div class="l">풍차 수익률</div><div class="v ${cls(res.retS)}">${pct(res.retS, 1)}</div><div class="s">주식+현금 기준</div></div>
+    <div class="kpi"><div class="l">그냥 보유 수익률</div><div class="v ${cls(res.retB)}">${pct(res.retB, 1)}</div><div class="s">${res.total0}주 계속 보유</div></div>
+    <div class="kpi"><div class="l">차이</div><div class="v ${cls(ex)}">${ex >= 0 ? '+' : ''}${(ex * 100).toFixed(1)}%p</div><div class="s">최종 ${money(it, res.fin)} vs ${money(it, res.bhFin)}</div></div>
+    <div class="kpi"><div class="l">최종 보유 주식</div><div class="v">${res.hold.toLocaleString()}주</div><div class="s ${cls(dShares)}">시작 대비 ${dShares >= 0 ? '+' : ''}${dShares.toLocaleString()}주 · 현금 ${money(it, res.cash)}</div></div>
+    <div class="kpi"><div class="l">최대 낙폭 (MDD)</div><div class="v">${pct(res.mddS, 1)}</div><div class="s">그냥 보유 ${pct(res.mddB, 1)}</div></div>
+    <div class="kpi"><div class="l">회차</div><div class="v">${res.rounds.length}회</div><div class="s">재매수 완료 ${done} · 풍차 ${res.cycles.length}번 시작 · STOP ${res.cycles.filter(c => c.stopIdx != null).length}번</div></div>
+    <div class="kpi"><div class="l">최대 미회수 / 최저 현금</div><div class="v">${res.maxUnrec.toLocaleString()}주</div><div class="s">현금 최저 ${money(it, res.minCash)}</div></div>
+  </div>`;
+}
+function vBacktest(it) {
+  const P = BTP(), pre = BT_PRE[P.market] || BT_PRE.US, pit = { market: P.market, krType: P.krType };
+  const f = (k, l, t = 'number', ex = '') => `<label class="f">${l}<input type="${t}" value="${esc(P[k])}" ${ex} onchange="A.btSet('${k}',this.value,'${t}')"></label>`;
+  const gl = P.gaps.map((g, i) => `<label>${i === P.gaps.length - 1 ? i + 1 + '회차~' : i + 1 + '회차'}<input value="${g}" onchange="A.btGap(${i},this.value)"></label>`).join('');
+  const dataOk = BTD.t && BTD.t.length;
+  const gapT = dataOk ? dataGap(BTD.t) : 0, notDaily = gapT > 4 || (BTD.i && dataGap(BTD.i) > 4);
+  const dInfo = dataOk ? `${notDaily ? `<b style="color:var(--red)">일봉이 아님 (봉 간격 약 ${Math.round(gapT)}일) — Apps Script 재배포 후 다시 불러오세요.</b> ` : ''}종목 ${BTD.t.length.toLocaleString()}개 봉 (${BTD.t[0][0]} ~ ${BTD.t[BTD.t.length - 1][0]})${BTD.i ? ` · 기준지수 ${BTD.i.length.toLocaleString()}일` : ' · 기준지수 없음'} · ${esc(BTD.src)} ${esc(BTD.at)}` : '데이터 없음';
+  let out = `
+  <div class="card"><h3>🧪 백테스트</h3>
+   <div class="muted">앱과 같은 풍차 규칙(시작 신호, 1·2회차 주 단위 출발, 3회차부터 재매수 완료+5주선 아래, 5주선 회복·재이탈, STOP)을 과거 일봉에 적용해 <b>그냥 보유했을 때</b>와 비교합니다.</div></div>
+  <div class="card"><h3>① 데이터</h3>
+   <div class="row">
+    <label class="f">시장<select onchange="A.btSet('market',this.value)"><option value="US" ${P.market === 'US' ? 'selected' : ''}>미국</option><option value="KR" ${P.market === 'KR' ? 'selected' : ''}>국내</option></select></label>
+    ${P.market === 'KR' ? `<label class="f">상품 유형<select onchange="A.btSet('krType',this.value)"><option value="ETF" ${P.krType === 'ETF' ? 'selected' : ''}>ETF/ETN</option><option value="STOCK" ${P.krType === 'STOCK' ? 'selected' : ''}>주식</option></select></label>` : ''}
+    ${f('ticker', P.market === 'US' ? '티커 (예: SOXL)' : '종목코드 (예: 122630)', 'text')}
+    ${f('indexTicker', P.market === 'US' ? '기준지수 (예: SOXX, 없으면 비움)' : '기준지수 코드 (선택)', 'text')}
+   </div>
+   <div class="row"><button class="btn s" onclick="A.btLoad()">웹앱으로 전체 일봉 불러오기</button>
+    <label class="btn s g">종목 CSV<input type="file" accept=".csv,text/csv" style="display:none" onchange="A.btCsv('t',this.files[0])"></label>
+    <label class="btn s g">기준지수 CSV<input type="file" accept=".csv,text/csv" style="display:none" onchange="A.btCsv('i',this.files[0])"></label>
+    <button class="btn s g" onclick="A.btFromItem()">현재 종목 설정 가져오기</button></div>
+   <div class="muted">${dataOk && !notDaily ? '✅ ' : '⚠️ '}${dInfo}</div>
+   <div class="muted">웹앱이 안 되면 야후 파이낸스 → Historical Data → 기간 Max, 일봉 → Download로 받은 CSV를 넣어도 됩니다. 시가·고가·저가가 없는 CSV는 종가로만 계산합니다.</div>
+  </div>
+  <div class="card"><h3>② 조건</h3>
+   <div class="row"><label class="f">기간 선택<select onchange="A.btPreset(this.value)">${pre.map((p, k) => `<option value="${k}" ${+P.preset === k ? 'selected' : ''}>${p.n}</option>`).join('')}<option value="-1" ${+P.preset === -1 ? 'selected' : ''}>직접 입력</option></select></label>
+    ${f('start', '시작일', 'date')}${f('end', '종료일', 'date')}</div>
+   <div class="row">${f('totalQty', '총 보유수량')}${f('coreQty', '코어 수량')}${f('slots', '슬롯 수')}${f('sellDays', '매도 일수')}</div>
+   <div class="muted">회차당 ${Math.floor((num(P.totalQty) - num(P.coreQty)) / Math.max(1, num(P.slots)))}주 · 하루 ${Math.floor(Math.floor((num(P.totalQty) - num(P.coreQty)) / Math.max(1, num(P.slots))) / Math.max(1, num(P.sellDays)))}주</div>
+   <div style="margin-top:8px"><b style="font-size:13px">회차별 매수 간격 (%)</b></div>
+   <div class="gaps">${gl}</div>
+   <div class="row"><button class="btn s g" onclick="A.btGapReset('US')">미국 기본 (5→2.5)</button><button class="btn s g" onclick="A.btGapReset('KR')">국내 기본 (3→1.5)</button>
+    <label><input type="checkbox" ${P.lateEntry ? 'checked' : ''} onchange="A.btSet('lateEntry',this.checked)"> 처음부터 마지막 간격</label></div>
+   <div class="row">${f('buyFee', '매수 수수료 %', 'number', 'step="0.001"')}${f('sellFee', '매도 수수료 %', 'number', 'step="0.001"')}${f('sellTax', '매도 세금 %', 'number', 'step="0.01"')}${f('minGap', '같은 날 완료 시 출발 간격')}</div>
+   <div class="row">
+    <label class="f">시작 방식<select onchange="A.btSet('startMode',this.value)"><option value="signal" ${P.startMode === 'signal' ? 'selected' : ''}>시작 신호(30주선 아래 음봉) 대기</option><option value="immediate" ${P.startMode === 'immediate' ? 'selected' : ''}>기간 첫날 바로 시작</option></select></label>
+    <label class="f">종목·지수 신호가 엇갈리면<select onchange="A.btSet('mix',this.value)"><option value="both" ${P.mix === 'both' ? 'selected' : ''}>둘 다 충족해야 인정</option><option value="ticker" ${P.mix === 'ticker' ? 'selected' : ''}>종목 기준</option><option value="index" ${P.mix === 'index' ? 'selected' : ''}>기준지수 기준</option></select></label>
+   </div>
+   <div class="row">
+    <label><input type="checkbox" ${P.useRec5 ? 'checked' : ''} onchange="A.btSet('useRec5',this.checked)"> 5주선 회복·재이탈 규칙</label>
+    <label><input type="checkbox" ${P.useStop ? 'checked' : ''} onchange="A.btSet('useStop',this.checked)"> STOP 규칙 (30주선 위 안착)</label>
+    <label><input type="checkbox" ${P.compare ? 'checked' : ''} onchange="A.btSet('compare',this.checked)"> 간격 비교 (×0.8, ×1.2)</label>
+   </div>
+   <div class="row"><button class="btn gr" onclick="A.btRunOne()">▶ 백테스트 실행</button><button class="btn" onclick="A.btBatch()">▶ 하락장 구간 일괄 실행</button></div>
+  </div>`;
+  if (BTR && BTR.main && !BTR.main.err) {
+    const r = BTR.main;
+    out += `<div class="card"><h3>③ 결과 — ${esc(P.ticker)} ${esc(BTR.title)}</h3>${btSummary(P, r, BTR.title)}<div style="margin-top:10px">${btChart(r)}</div>`;
+    if (BTR.vars) {
+      out += `<div style="margin-top:10px"><b style="font-size:13px">간격 비교</b></div><div class="tw"><table class="x"><tr><th>간격</th><th>풍차</th><th>보유</th><th>차이</th><th>최종 주식</th><th>회차</th><th>MDD</th></tr>` +
+        BTR.vars.map(v => { const x = v.res; return x.err ? '' : `<tr><td class="c">${v.label}<br><span class="muted">${x.gaps.join('·')}</span></td><td class="${cls(x.retS)}">${pct(x.retS, 1)}</td><td>${pct(x.retB, 1)}</td><td class="${cls(x.retS - x.retB)}">${((x.retS - x.retB) * 100).toFixed(1)}%p</td><td>${x.hold.toLocaleString()}</td><td>${x.rounds.length}</td><td>${pct(x.mddS, 1)}</td></tr>`; }).join('') + `</table></div>`;
+    }
+    if (!r.rounds.length) {
+      const nT = r.weeks.filter(w => w.jt && w.jt.start).length, nX = r.weeks.filter(w => w.jx && w.jx.start).length;
+      out += `<div class="alert" style="margin-top:10px"><b>이 기간에는 풍차가 한 번도 돌지 않았습니다.</b> 그래서 그냥 보유와 결과가 같습니다.<br>
+        시작 신호(몸통 전체 30주선 아래 음봉)가 나온 주: ${esc(P.ticker)} ${nT}번${r.hasX ? ` · ${esc(P.indexTicker)} ${nX}번` : ''}${r.hasX && P.mix === 'both' ? ' — 현재 "둘 다 충족해야 인정"이라 같은 주에 둘 다 나와야 시작합니다.' : ''}<br>아래 [주봉 신호표]에서 주별로 확인하세요.</div>`;
+    }
+    const sigCell = (b, j) => !b ? '<td colspan="5" class="c muted">-</td>' : `<td>${fp(pit, b.o)}</td><td>${fp(pit, b.c)}</td><td>${fp(pit, b.ma5)}</td><td>${fp(pit, b.ma30)}</td><td class="c">${j ? [j.start ? '<b class="y">시작</b>' : '', j.stop ? '<b style="color:var(--red)">STOP</b>' : '', j.rec5 ? '5↑' : '', j.under5 ? '5↓' : ''].filter(Boolean).join(' ') || '-' : '-'}</td>`;
+    out += `<details class="mini" data-k="bt-wk" ${r.rounds.length ? '' : 'open'}><summary>주봉 신호표 (${r.weeks.length}주)</summary>
+      <div class="muted">각 주 마지막 거래일 종가 기준입니다. 시작=몸통 전체 30주선 아래 음봉 · 5↓=종가 5주선 아래 · 5↑=몸통 전체 5주선 위 · STOP=몸통 전체 30주선 위. "적용"은 종목·지수 처리 방식을 반영한 최종 판정이고 다음 거래일부터 적용됩니다.</div>
+      <div class="tw"><table class="x"><tr><th rowspan="2">주(월)</th><th colspan="5">${esc(P.ticker)}</th>${r.hasX ? `<th colspan="5">${esc(P.indexTicker)}</th>` : ''}<th rowspan="2">적용</th><th rowspan="2">풍차</th></tr>
+      <tr><th>시가</th><th>종가</th><th>5주선</th><th>30주선</th><th>신호</th>${r.hasX ? '<th>시가</th><th>종가</th><th>5주선</th><th>30주선</th><th>신호</th>' : ''}</tr>` +
+      r.weeks.slice().reverse().map(w => `<tr><td class="c">${w.k.slice(2)}</td>${sigCell(w.t, w.jt)}${r.hasX ? sigCell(w.x, w.jx) : ''}<td class="c">${w.s ? [w.s.start ? '<b class="y">시작</b>' : '', w.s.stop ? '<b style="color:var(--red)">STOP</b>' : '', w.s.rec5 ? '5↑' : '', w.s.under5 ? '5↓' : ''].filter(Boolean).join(' ') || '-' : '-'}</td><td class="c">${w.running ? '진행' : ''}</td></tr>`).join('') + `</table></div></details>`;
+    out += `<details class="mini" data-k="bt-ev"><summary>진행 기록 (${r.ev.length})</summary><div class="muted">${r.ev.map(e => `${r.T[e.i][0]} · ${esc(e.t)}`).join('<br>')}</div></details>`;
+    out += `<details class="mini" data-k="bt-rd"><summary>회차별 내역 (${r.rounds.length}회)</summary><div class="tw"><table class="x"><tr><th>회차</th><th>슬롯</th><th>간격</th><th>출발</th><th>매도평단</th><th>재매수</th><th>완료일</th><th>걸린 거래일</th><th>이익</th><th>상태</th></tr>` +
+      r.rounds.map(x => `<tr><td class="c">${x.no}${r.cycles.length > 1 ? `<span class="muted"> (${x.cyc}-${x.cn})</span>` : ''}</td><td class="c">${x.slot}</td><td>${x.gap}%</td><td class="c">${r.T[x.startIdx][0]}</td><td>${fp(pit, x.avg)}</td><td>${x.got}/${x.sold}</td><td class="c">${x.doneIdx != null ? r.T[x.doneIdx][0] : '-'}</td><td>${x.doneIdx != null ? x.doneIdx - x.sells[x.sells.length - 1].idx : '-'}</td><td class="${cls(x.profit)}">${famt(x.profit)}</td><td class="c">${stBadge(x.status) || ''}</td></tr>`).join('') + `</table></div></details>`;
+    out += `</div>`;
+  } else if (BTR && BTR.main && BTR.main.err) out += `<div class="card alert bad">${esc(BTR.main.err)}</div>`;
+  if (BTB) {
+    out += `<div class="card"><h3>③ 하락장 구간 일괄 결과 — ${esc(P.ticker)}</h3><div class="tw"><table class="x"><tr><th>구간</th><th>기간</th><th>그냥 보유</th><th>풍차</th><th>차이</th><th>주식 수 변화</th><th>회차</th><th>STOP</th><th>MDD (풍차/보유)</th></tr>` +
+      BTB.map(b => { const x = b.res; if (x.err) return `<tr><td class="c">${b.n}</td><td colspan="8" class="c muted">${esc(x.err)}</td></tr>`; const ds = x.hold - x.total0; return `<tr><td class="c">${b.n}</td><td class="c">${x.d0.slice(2)}~${x.d1.slice(2)}</td><td class="${cls(x.retB)}">${pct(x.retB, 1)}</td><td class="${cls(x.retS)}">${pct(x.retS, 1)}</td><td class="${cls(x.retS - x.retB)}"><b>${((x.retS - x.retB) * 100).toFixed(1)}%p</b></td><td class="${cls(ds)}">${ds >= 0 ? '+' : ''}${ds}주</td><td>${x.rounds.length}</td><td>${x.cycles.filter(c => c.stopIdx != null).length}</td><td>${pct(x.mddS, 0)} / ${pct(x.mddB, 0)}</td></tr>`; }).join('') +
+      `</table></div><div class="muted" style="margin-top:6px">구간 날짜는 대략적인 하락장 구간입니다. [기간 선택 → 직접 입력]으로 원하는 구간을 따로 볼 수 있습니다. 각 구간은 시작일에 ${num(P.totalQty)}주를 보유한 상태에서 따로 계산합니다.</div></div>`;
+  }
+  out += `<div class="card"><h3>계산 가정</h3><ul class="muted">
+   <li>MOC 매도는 그날 종가로 체결합니다.</li>
+   <li>지정가 매수는 시가가 지정가 이하면 시가에, 장중 저가가 지정가 이하면 지정가에 체결한 것으로 봅니다. 프리장·애프터장 체결은 일봉에 없어 반영하지 못합니다.</li>
+   <li>주봉 신호는 그 주 마지막 거래일 종가가 확정된 뒤 다음 거래일부터 적용합니다. 5주선 회복 때 50% 채우는 매수는 다음 거래일 시가로 계산합니다.</li>
+   <li>STOP은 다음 5거래일 종가로 미회수 수량 + 남은 현금으로 살 수 있는 만큼 나눠 삽니다. 이후 새 시작 신호가 나오면 늘어난 주식 수로 풍차를 다시 시작합니다.</li>
+   <li>가격은 야후·네이버의 액면분할 반영 가격입니다. 배당과 환율은 반영하지 않습니다. 기간잔량 주문은 만료 없이 이어진 것으로 봅니다.</li>
+   <li>과거 결과가 앞으로의 수익을 보장하지 않습니다.</li></ul></div>`;
+  return out;
+}
+Object.assign(A, {
+  btSet(k, v, t) {
+    const P = BTP(); P[k] = t === 'number' ? num(v) : v;
+    if (k === 'market') { P.gaps = (v === 'US' ? GAP_US : GAP_KR).slice(); P.preset = 0; P.start = BT_PRE[v][0].s; P.end = BT_PRE[v][0].e; }
+    if (k === 'start' || k === 'end') P.preset = -1;
+    render();
+  },
+  btGap(i, v) { BTP().gaps[i] = num(v); render(); },
+  btGapReset(m) { BTP().gaps = (m === 'US' ? GAP_US : GAP_KR).slice(); render(); },
+  btPreset(k) { const P = BTP(); P.preset = +k; const p = (BT_PRE[P.market] || BT_PRE.US)[+k]; if (p) { P.start = p.s; P.end = p.e; } render(); },
+  btFromItem() { const P = BTP(), d = btDefaults(IT()); ['market', 'krType', 'ticker', 'indexTicker', 'totalQty', 'coreQty', 'slots', 'sellDays', 'gaps', 'buyFee', 'sellFee', 'sellTax', 'minGap'].forEach(k => P[k] = d[k]); toast('현재 종목 설정을 가져왔습니다'); render(); },
+  async btLoad() {
+    const P = BTP();
+    if (!S.webappUrl) return toast('[설정]에서 웹앱 URL을 먼저 입력하세요');
+    const pre = P.market === 'KR' ? 'KR:' : 'US:';
+    const syms = [P.ticker, P.indexTicker].filter(x => String(x || '').trim()).map(x => pre + String(x).trim().toUpperCase());
+    if (!syms.length) return toast('티커를 입력하세요');
+    toast('전체 일봉을 불러오는 중… (10초 이상 걸릴 수 있음)');
+    try {
+      const res = await fetch(S.webappUrl + (S.webappUrl.includes('?') ? '&' : '?') + 'range=max&symbols=' + encodeURIComponent(syms.join(',')));
+      const j = await res.json(), t = j.data && j.data[syms[0]], x = syms[1] && j.data && j.data[syms[1]];
+      if (!t || !t.ok) throw new Error(syms[0] + ': ' + (t ? t.error : '응답 없음'));
+      BTD.t = t.daily; BTD.i = x && x.ok ? x.daily : null; BTD.key = syms.join(','); BTD.src = '웹앱';
+      BTD.at = new Date().toLocaleDateString('ko-KR');
+      try { localStorage.setItem('wm_btd', JSON.stringify(BTD)); } catch (e) { }
+      BTR = BTB = null; render();
+      if (dataGap(BTD.t) > 4) toast('일봉이 아닌 데이터가 왔습니다. Apps Script 코드를 새로 복사해 새 버전으로 재배포하세요');
+      else if (BTD.t[0][0] > addDays(today(), -400)) toast('1년치만 받아졌습니다. Apps Script 코드를 새 버전으로 다시 배포하세요 ([설정] 탭 코드 복사)');
+      else toast(`불러오기 완료${syms[1] && !BTD.i ? ' (기준지수 실패: ' + (x ? x.error : '응답 없음') + ')' : ''}`);
+    } catch (e) { toast('불러오기 실패: ' + e.message + ' — CSV로 넣어 주세요'); }
+  },
+  btCsv(w, file) {
+    if (!file) return;
+    const fr = new FileReader();
+    fr.onload = () => {
+      const rows = parseCsv(fr.result);
+      if (!rows || rows.length < 40) return toast('CSV를 읽지 못했습니다 (날짜·종가 열 필요)');
+      BTD[w] = rows; BTD.src = 'CSV'; BTD.at = file.name;
+      try { localStorage.setItem('wm_btd', JSON.stringify(BTD)); } catch (e) { }
+      BTR = BTB = null; toast(`${w === 't' ? '종목' : '기준지수'} ${rows.length}일 불러옴`); render();
+    };
+    fr.readAsText(file);
+  },
+  btRunOne() {
+    const P = BTP();
+    if (!BTD.t) return toast('먼저 데이터를 불러오세요');
+    const pre = (BT_PRE[P.market] || BT_PRE.US)[+P.preset];
+    const main = btRun(P, BTD.t, BTD.i);
+    BTR = { main, title: pre ? pre.n : '직접 입력', vars: P.compare && !main.err ? [{ label: '기본', res: main }, { label: '×0.8 (좁게)', res: btRun(P, BTD.t, BTD.i, { mul: 0.8 }) }, { label: '×1.2 (넓게)', res: btRun(P, BTD.t, BTD.i, { mul: 1.2 }) }] : null };
+    BTB = null; render();
+  },
+  btBatch() {
+    const P = BTP();
+    if (!BTD.t) return toast('먼저 데이터를 불러오세요');
+    BTB = (BT_PRE[P.market] || BT_PRE.US).map(p => ({ n: p.n, res: btRun({ ...P, start: p.s, end: p.e }, BTD.t, BTD.i) }));
+    BTR = null; render();
+  }
+});
 
 render();
 // 웹앱 URL이 설정된 경우 최초 실행 후 시세를 조회하고 5분마다 자동 갱신합니다.
