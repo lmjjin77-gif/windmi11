@@ -88,6 +88,10 @@ table.gt th,table.gt td{border:1px solid var(--line);padding:6px 8px;vertical-al
 table.gt th{background:#f3f6fa;white-space:nowrap;width:1%}
 table.gt.c th,table.gt.c td{text-align:center;width:auto}
 .gapp{margin-top:8px;background:#ecfaf2;border-left:4px solid var(--grn);padding:7px 10px;border-radius:6px;font-size:13px}
+.advbox{display:flex;flex-direction:column;gap:8px;margin-top:6px}
+.advr{background:#f7f9fc;border:1px solid var(--line);border-radius:8px;padding:7px 10px}
+.advr label{font-size:13px}
+input.advn,select.advn{width:58px;padding:3px 4px;border:1px solid #c5ccd6;border-radius:4px;font-size:13px;text-align:center}
 .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#222c;color:#fff;padding:9px 16px;border-radius:20px;font-size:13px;z-index:99;display:none}
 </style>
 </head>
@@ -189,7 +193,7 @@ function test() {
 <script>
 'use strict';
 /* =========================================================
-   풍차돌리기 매니저 v1.5
+   풍차돌리기 매니저 v2.3
    - 하락장 대처법 풍차돌리기 (분할 MOC 매도 → 등비 지정가 재매수)
    ========================================================= */
 const KEY = 'windmill_mgr_v1';
@@ -281,6 +285,9 @@ function load() {
   return { webappUrl: '', active: it.id, items: [it] };
 }
 let S = load();
+/* v2.2의 자동 모드(⑧) 삭제 — 저장된 설정에서 값 제거 */
+(S.items || []).forEach(it => { if (it.adv) delete it.adv.auto; });
+if (S.bt && S.bt.adv) delete S.bt.adv.auto;
 let TAB = 'dash';
 const OPEN = {};
 const DOPEN = {}; // 펼침 상태 기억 (다시 그려도 유지)
@@ -315,7 +322,8 @@ function curPrice(it) {
 
 /* ---------- 계산 ---------- */
 const slotQty = it => Math.floor((num(it.totalQty) - num(it.coreQty)) / Math.max(1, num(it.slots)));
-function gapFor(it, no) { const g = it.gaps; return it.lateEntry ? g[g.length - 1] : g[Math.min(no - 1, g.length - 1)]; }
+function liveAtr(it) { const d = it.quote && it.quote.daily; if (!d) return null; let e = d.length - 1; while (e > 0 && !isFinal(it, d[e][0])) e--; return atrPct(d, e); }
+function gapFor(it, no) { const g = it.gaps, gi = it.lateEntry ? g.length - 1 : Math.min(no - 1, g.length - 1); const a = advOf(it); return advGap(a, g, gi, a.on5 ? liveAtr(it) : null); }
 function fees(it) { return { bf: num(it.buyFee) / 100, sf: (num(it.sellFee) + num(it.sellTax)) / 100 }; }
 function splitQty(total, n) { const b = Math.floor(total / n), rem = total - b * n; return Array.from({ length: n }, (_, i) => b + (i >= n - rem ? 1 : 0)); }
 function makeOrders(it, r, avg, qty) {
@@ -401,12 +409,15 @@ function ic(it) {
   const sbq = sb.reduce((a, x) => a + num(x.q), 0);
   const sbc = sb.reduce((a, x) => a + num(x.q) * num(x.p) * (1 + bf), 0);
   cash -= sbc;
-  const hold = num(it.totalQty) - sold + bought + sbq;
+  const rv = (it.reinvest || []).filter(x => num(x.q) && num(x.p));
+  const rvq = rv.reduce((a, x) => a + num(x.q), 0);
+  cash -= rv.reduce((a, x) => a + num(x.q) * num(x.p) * (1 + bf), 0);
+  const hold = num(it.totalQty) - sold + bought + sbq + rvq;
   const unrec = Math.max(0, sold - bought - sbq);
   const price = curPrice(it);
   const evalv = price ? hold * price + cash : null;
   const base = price ? num(it.totalQty) * price : null;
-  return { rcs, sold, bought, cash, profit, hold, unrec, price, evalv, base, sbq };
+  return { rcs, sold, bought, cash, profit, hold, unrec, price, evalv, base, sbq, rvq };
 }
 
 /* ---------- 주봉 / 신호 ---------- */
@@ -418,7 +429,7 @@ function weekly(daily) {
     else w.push({ k, d1: d, d2: d, o, h, l, c });
   }
   const avgC = (i, n) => { let s = 0; for (let j = i - n + 1; j <= i; j++) s += w[j].c; return s / n; };
-  w.forEach((b, i) => { b.ma5 = i >= 4 ? avgC(i, 5) : null; b.ma30 = i >= 29 ? avgC(i, 30) : null; });
+  w.forEach((b, i) => { b.ma5 = i >= 4 ? avgC(i, 5) : null; b.ma10 = i >= 9 ? avgC(i, 10) : null; b.ma20 = i >= 19 ? avgC(i, 20) : null; b.ma30 = i >= 29 ? avgC(i, 30) : null; });
   return w;
 }
 function pickWeek(it, w) {
@@ -428,12 +439,13 @@ function pickWeek(it, w) {
   if (complete || it.includeCurrentWeek) return { ...L, complete };
   return w.length > 1 ? { ...w[w.length - 2], complete: true } : null;
 }
-function judge(b) {
+function judge(b, sN = 30) {
   if (!b || !b.ma5) return null;
   const { o, c, ma5, ma30 } = b;
+  const ms = b['ma' + sN] || ma30; // ④ STOP 기준선 (기본 30주선)
   return {
     start: ma30 ? (o < ma30 && c < ma30 && c < o) : null,
-    stop: ma30 ? (o > ma30 && c > ma30) : null,
+    stop: ms ? (o > ms && c > ms) : null,
     rec5: o > ma5 && c > ma5,
     under5: c < ma5
   };
@@ -444,11 +456,11 @@ function sigOne(it, which) {
   const manualOk = num(m.o) && num(m.c) && num(m.ma5);
   if ((it.useManual || !q) && manualOk) {
     const b = { k: m.d || '', d2: m.d || '', o: num(m.o), c: num(m.c), ma5: num(m.ma5), ma30: num(m.ma30) || null, complete: true };
-    return { bar: b, j: judge(b), src: '수동' };
+    return { bar: b, j: judge(b, stopN(advOf(it))), src: '수동' };
   }
   if (q && q.daily && q.daily.length) {
     const w = weekly(q.daily), b = pickWeek(it, w);
-    return { bar: b, j: judge(b), src: '자동', w };
+    return { bar: b, j: judge(b, stopN(advOf(it))), src: '자동', w };
   }
   return { bar: null, j: null, src: '없음' };
 }
@@ -462,6 +474,53 @@ function signals(it) {
     else v[k] = a === b ? a : 'mixed';
   });
   return { t, i, v };
+}
+
+/* ---------- 개선안 (실험) — 실전·백테스트 공통 ---------- */
+const APP_VER = 'v2.3';
+const ADV_DEF = { on1: false, oversold: 40, on2: false, chaseUp: 20, chasePct: 50, on3: false, rec5Pct: 70, on4: false, stopLine: 20, on5: false, atrK: 1, on6: false, on7: false, maxUnrecPct: 50 };
+const ADV_KEYS = ['on1', 'on2', 'on3', 'on4', 'on5', 'on6', 'on7'];
+const ADV_NAME = { on1: '① 바닥 이격 제한', on2: '② 반등 추격 매수', on3: '③ 5주선 회복 채움 비율', on4: '④ STOP 기준선', on5: '⑤ 변동성 기반 간격', on6: '⑥ 차익금 즉시 재투자', on7: '⑦ 미회수 한도' };
+const advOf = o => Object.assign({}, ADV_DEF, (o && o.adv) || {});
+const anyAdv = a => ADV_KEYS.some(k => a[k]);
+const advOnly = (a, k) => { const b = { ...a }; ADV_KEYS.forEach(x => b[x] = x === k); return b; };
+const advNone = a => { const b = { ...a }; ADV_KEYS.forEach(x => b[x] = false); return b; };
+const stopN = a => a.on4 ? ([10, 20, 30].includes(+a.stopLine) ? +a.stopLine : 30) : 30;
+const rec5Pct = a => a.on3 ? Math.min(100, Math.max(0, num(a.rec5Pct))) : 50;
+/* 최근 n일 평균 변동폭(ATR, %) — endIdx 봉까지만 사용 */
+function atrPct(daily, endIdx, n = 20) {
+  if (!daily || endIdx < n || endIdx >= daily.length) return null;
+  let s = 0;
+  for (let k = endIdx - n + 1; k <= endIdx; k++) { const h = daily[k][2], l = daily[k][3], pc = daily[k - 1][4]; s += Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)) / pc; }
+  return s / n * 100;
+}
+/* 회차 간격: 간격표 또는 ⑤ 변동성 간격 (간격표의 줄어드는 비율 유지) */
+function advGap(a, gaps, gi, atr) {
+  const base = num(gaps[gi]);
+  if (!a.on5 || !atr) return base;
+  return Math.min(15, Math.max(0.5, Math.round(num(a.atrK) * atr * (base / num(gaps[0])) * 10) / 10));
+}
+/* 지정가 주문 수량 줄이기 (높은 지정가부터) */
+function reduceOrders(orders, need, getFilled) {
+  for (const o of orders) {
+    if (need <= 0) break;
+    const op = num(o.qty) - getFilled(o);
+    if (op <= 0) continue;
+    const t = Math.min(op, need); o.qty = num(o.qty) - t; need -= t;
+  }
+}
+function advForm(a, fn) {
+  const cb = (k) => `<label><input type="checkbox" ${a[k] ? 'checked' : ''} onchange="A.${fn}('${k}',this.checked)"> <b>${ADV_NAME[k]}</b></label>`;
+  const nb = (k) => `<input type="number" value="${esc(a[k])}" class="advn" onchange="A.${fn}('${k}',this.value,'number')">`;
+  return `<div class="advbox">
+   <div class="advr">${cb('on1')}<div class="muted">30주선보다 ${nb('oversold')}% 이상 아래에 있으면 새 회차를 보류합니다. 폭락 바닥 근처에서 파는 것을 피합니다.</div></div>
+   <div class="advr">${cb('on2')}<div class="muted">회차를 판 뒤 최저 종가보다 ${nb('chaseUp')}% 이상 반등하면 미회수 물량의 ${nb('chasePct')}%를 바로 되삽니다 (회차당 1번). V자 반등 대응.</div></div>
+   <div class="advr">${cb('on3')}<div class="muted">5주선 회복 때 50% 대신 ${nb('rec5Pct')}%까지 채우고 대기합니다.</div></div>
+   <div class="advr">${cb('on4')}<div class="muted">주봉 몸통 전체가 <select class="advn" onchange="A.${fn}('stopLine',this.value,'number')">${[10, 20, 30].map(n => `<option value="${n}" ${+a.stopLine === n ? 'selected' : ''}>${n}</option>`).join('')}</select>주선 위에 안착하면 STOP합니다 (기본 30주선보다 빨리 끝냄).</div></div>
+   <div class="advr">${cb('on5')}<div class="muted">1회차 간격 = 최근 20일 평균 변동폭(ATR) × ${nb('atrK')}. 이후 회차는 간격표의 줄어드는 비율대로 좁힙니다 (0.5~15%).</div></div>
+   <div class="advr">${cb('on6')}<div class="muted">회차 재매수가 끝날 때마다 그 차익금으로 주식을 추가 매수합니다 (셀프 리로드 방식). 못 되산 물량을 되살 돈은 남겨둡니다.${fn === 'advSet' && a.on6 && a.on6Since ? ` 실전에서는 켠 날(${md(a.on6Since)}) 이후 완료된 회차부터 적용합니다.` : ''}</div></div>
+   <div class="advr">${cb('on7')}<div class="muted">미회수 수량이 운용 물량의 ${nb('maxUnrecPct')}% 이상이면 새 회차를 보류합니다.</div></div>
+  </div>`;
 }
 
 /* ---------- 다음 회차 ---------- */
@@ -556,7 +615,7 @@ function vDash(it, I) {
   if (!G.t.j && !G.i.j) al.push(`<div class="alert info">주봉 신호 데이터가 없습니다. [⟳ 시세]로 불러오거나 [신호] 탭에서 직접 입력하세요.</div>`);
   ['start', 'stop', 'rec5', 'under5'].forEach(k => { if (v[k] === 'mixed') al.push(`<div class="alert">⚠️ ${{ start: '시작', stop: 'STOP(30주선 위 안착)', rec5: '5주선 회복', under5: '5주선 아래' }[k]} 신호가 종목과 기준지수에서 다르게 나왔습니다. 본인 판단으로 결정하세요.</div>`); });
   if (it.stopped) al.push(`<div class="alert bad">⛔ 풍차를 종료(STOP)했습니다. 아래 STOP 매수 계획을 진행하세요.</div>`);
-  else if (running && v.stop === true) al.push(`<div class="alert bad">⛔ <b>STOP 신호</b>: 주봉 몸통 전체가 30주선 위에 안착했습니다. 상승장 전환으로 보고 풍차를 끝낼 시점입니다. <button class="btn s r" onclick="A.stopStart()">STOP 처리</button></div>`);
+  else if (running && v.stop === true) al.push(`<div class="alert bad">⛔ <b>STOP 신호</b>: 주봉 몸통 전체가 ${stopN(advOf(it))}주선 위에 안착했습니다${advOf(it).on4 ? ' (개선안 ④)' : ''}. 상승장 전환으로 보고 풍차를 끝낼 시점입니다. <button class="btn s r" onclick="A.stopStart()">STOP 처리</button></div>`);
   if (!it.rounds.length && v.start === true) al.push(`<div class="alert ok">✅ <b>시작 신호</b>: 주봉 몸통 전체가 30주선 아래 음봉입니다. 1회차를 출발할 수 있습니다.</div>`);
   if (!it.rounds.length && v.start === false) al.push(`<div class="alert info">아직 시작 신호가 없습니다 (30주선 아래 음봉 대기).</div>`);
   // 15% 급락
@@ -571,11 +630,15 @@ function vDash(it, I) {
     if (c.status === 'buying') {
       const bl = c.ords.filter(o => o.blue);
       if (bl.length) al.push(`<div class="alert info">🔵 ${r.no}회차: 지정가 ${bl.map(o => '매수' + o.n).join(', ')}가 현재가(${fp(it, I.price)})보다 높아 <b>바로 체결 가능</b>합니다. 현재가 부근 지정가로 주문하는 것이 유리합니다.</div>`);
-      if (v.rec5 === true) al.push(`<div class="alert">↗️ ${r.no}회차: <b>5주선 회복</b> — 판 수량의 50%까지만 채우고 대기합니다. <button class="btn s o" onclick="A.tab('rounds');A.open('${r.id}')">처리하러 가기</button></div>`);
+      if (v.rec5 === true) al.push(`<div class="alert">↗️ ${r.no}회차: <b>5주선 회복</b> — 판 수량의 ${rec5Pct(advOf(it))}%까지만 채우고 대기합니다. <button class="btn s o" onclick="A.tab('rounds');A.open('${r.id}')">처리하러 가기</button></div>`);
       if (c.expire && today() > c.expire && c.openQ > 0) al.push(`<div class="alert">⏰ ${r.no}회차: 기간잔량 주문 유효기간(${md(c.expire)})이 지났습니다. 미체결 ${c.openQ}주만 다시 넣으세요.</div>`);
       const lk = likelyFills(it, c);
       if (lk.length) al.push(`<div class="alert info">🔎 ${r.no}회차: 일봉 저가 기준 ${lk.map(o => '매수' + o.n).join(', ')} 체결됐을 수 있습니다. 증권사 체결내역 확인 후 입력하세요.</div>`);
     }
+    const ch = liveChase(it, r, c);
+    if (ch) al.push(`<div class="alert">🚀 ${r.no}회차 <b>② 반등 추격</b>: 판 뒤 최저 종가 ${fp(it, ch.mn)}에서 ${(ch.up * 100).toFixed(1)}% 반등했습니다. 미회수 물량의 ${advOf(it).chasePct}%인 <b>${ch.qty}주</b>를 바로 되사세요. <button class="btn s o" onclick="A.tab('rounds');A.open('${r.id}')">기록하러 가기</button></div>`);
+    const rv = liveReinv(it, r, c, I);
+    if (rv && rv.qty > 0) al.push(`<div class="alert ok">💰 ${r.no}회차 <b>⑥ 차익금 재투자</b>: 차익 ${money(it, rv.profit)} 중 ${money(it, rv.amt)}으로 약 <b>${rv.qty}주</b>를 추가 매수하세요${rv.reserve > 0 ? ` (못 되산 ${I.unrec}주를 되살 돈 ${money(it, rv.reserve)}은 남겨둠)` : ''}. <button class="btn s gr" onclick="A.tab('rounds');A.open('${r.id}')">기록하러 가기</button></div>`);
     if (c.status === 'paused' && v.under5 === true) al.push(`<div class="alert">↘️ ${r.no}회차: <b>5주선 재이탈</b> — 남은 지정가 재매수를 재개합니다. <button class="btn s" onclick="A.resume('${r.id}')">주문 재개</button></div>`);
   });
   // 다음 회차
@@ -588,9 +651,10 @@ function vDash(it, I) {
       else if (!np.initial) cond = v.under5 === true ? '<span class="y">5주선 아래 — 출발 가능</span>' : v.under5 === 'mixed' ? '<span class="badge b-mix">판단 필요</span>' : v.under5 === false ? '<span class="n">5주선 위 — 대기</span>' : '<span class="n">신호 없음</span>';
       else cond = '<span class="y">다음 주 출발</span>';
       const def = maxD(np.earliest, today());
-      nextHtml = `
+      const hr = liveHold(it, I, G), at = advOf(it).on5 ? liveAtr(it) : null;
+      nextHtml = `${hr.map(x => `<div class="alert">⏸️ ${esc(x)}</div>`).join('')}
       <div class="row"><b>${np.no}회차</b> · 슬롯 ${np.slot} · 간격 <b>${np.gap}%</b> · ${slotQty(it)}주 (하루 ${Math.floor(slotQty(it) / num(it.sellDays))}주 × ${it.sellDays}일) · ${cond}</div>
-      <div class="muted">${esc(np.why)}${np.earliest ? ' · 가능일 ' + md(np.earliest) + ' 이후' : ''}</div>
+      <div class="muted">${esc(np.why)}${np.earliest ? ' · 가능일 ' + md(np.earliest) + ' 이후' : ''}${advOf(it).on5 ? ` · ⑤ 변동성 간격: 최근 20일 변동폭 ${at ? at.toFixed(2) + '%' : '데이터 없음(간격표 사용)'}` : ''}</div>
       <div class="row"><label class="f" style="max-width:180px">출발일(1일차 매도)<input type="date" id="nsDate" value="${def}"></label>
       <button class="btn gr" onclick="A.startRound()" style="align-self:flex-end">${np.no}회차 출발</button></div>`;
     }
@@ -614,7 +678,7 @@ function vDash(it, I) {
   ${al.join('')}
   <div class="card"><h3>📊 요약 — ${esc(it.name || it.ticker)}</h3>
    <div class="grid">
-    <div class="kpi"><div class="l">보유 수량</div><div class="v">${I.hold.toLocaleString()}주</div><div class="s">원래 ${num(it.totalQty).toLocaleString()} · 코어 ${num(it.coreQty).toLocaleString()}</div></div>
+    <div class="kpi"><div class="l">보유 수량</div><div class="v">${I.hold.toLocaleString()}주</div><div class="s">원래 ${num(it.totalQty).toLocaleString()} · 코어 ${num(it.coreQty).toLocaleString()}${I.rvq ? ` · 재투자 +${I.rvq}` : ''}</div></div>
     <div class="kpi"><div class="l">미회수 수량</div><div class="v">${I.unrec.toLocaleString()}주</div><div class="s">팔고 아직 못 되산 수량</div></div>
     <div class="kpi"><div class="l">확정 차익금</div><div class="v ${cls(I.profit)}">${money(it, I.profit)}</div><div class="s">재매수 체결분 기준</div></div>
     <div class="kpi"><div class="l">보유 현금</div><div class="v">${money(it, I.cash)}</div><div class="s">매도대금 − 재매수비용</div></div>
@@ -630,9 +694,37 @@ function vDash(it, I) {
    <div class="flag"><span>시작 (30주선 아래 음봉)</span>${yn(v.start)}</div>
    <div class="flag"><span>5주선 아래</span>${yn(v.under5)}</div>
    <div class="flag"><span>5주선 회복 (몸통 전체 위)</span>${yn(v.rec5)}</div>
-   <div class="flag"><span>STOP (몸통 전체 30주선 위)</span>${yn(v.stop)}</div>
+   <div class="flag"><span>STOP (몸통 전체 ${stopN(advOf(it))}주선 위)</span>${yn(v.stop)}</div>
+   ${anyAdv(advOf(it)) ? `<div class="muted" style="margin-top:6px">켜진 개선안: ${ADV_KEYS.filter(k => advOf(it)[k]).map(k => ADV_NAME[k]).join(', ')}</div>` : ''}
    <div class="muted" style="margin-top:6px">기준 주봉: ${G.t.bar ? md(G.t.bar.k) + ' 주' + (G.t.bar.complete ? '' : ' (진행 중)') : '-'} · ${esc(it.ticker)}${it.indexTicker ? ' + ' + esc(it.indexTicker) : ''} · ${G.t.src}</div>
   </div>`;
+}
+/* 실전: 개선안 판단 */
+function liveHold(it, I, G) { // ①·⑦ 새 회차 보류 사유
+  const a = advOf(it), out = [];
+  const ma30 = G.t.bar && G.t.bar.ma30, p = I.price;
+  if (a.on1 && ma30 && p && p / ma30 - 1 <= -num(a.oversold) / 100) out.push(`① 현재가가 30주선(${fp(it, ma30)})보다 ${((1 - p / ma30) * 100).toFixed(1)}% 아래 — 새 회차 보류 (기준 ${a.oversold}%)`);
+  const lim = num(a.maxUnrecPct) / 100 * num(it.slots) * slotQty(it);
+  if (a.on7 && I.unrec >= lim) out.push(`⑦ 미회수 ${I.unrec}주가 한도 ${Math.round(lim)}주(운용 물량의 ${a.maxUnrecPct}%) 이상 — 새 회차 보류`);
+  return out;
+}
+function liveChase(it, r, c) { // ② 반등 추격 조건
+  const a = advOf(it), q = it.quote;
+  if (!a.on2 || r.chased || !(c.status === 'buying' || c.status === 'paused') || !q || !q.daily) return null;
+  const rows = q.daily.filter(d => d[0] >= r.sells[0].d && isFinal(it, d[0]));
+  if (!rows.length) return null;
+  const mn = Math.min(...rows.map(d => d[4])), last = rows[rows.length - 1][4];
+  if (last < mn * (1 + num(a.chaseUp) / 100)) return null;
+  return { mn, last, up: last / mn - 1, qty: Math.ceil((c.soldQ - c.filledQ) * num(a.chasePct) / 100) };
+}
+function liveReinv(it, r, c, I) { // ⑥ 재투자 대상 — 못 되산 물량을 되살 돈은 남겨둠
+  const a = advOf(it), p = curPrice(it);
+  if (!a.on6 || r.reinvested || c.status !== 'done' || c.profit <= 0 || !p) return null;
+  if (a.on6Since && c.doneDate && c.doneDate < a.on6Since) return null; // ⑥을 켠 날 이후 완료된 회차만
+  const { bf } = fees(it), px = p * (1 + bf);
+  I = I || ic(it);
+  const reserve = I.unrec * px, amt = Math.min(c.profit, I.cash - reserve);
+  return { profit: c.profit, reserve, amt: Math.max(0, amt), qty: amt > 0 ? Math.floor(amt / px) : 0 };
 }
 function likelyFills(it, c) {
   const q = it.quote;
@@ -656,6 +748,10 @@ function vStop(it, I) {
    매수 계획 <b>${P.total ?? '-'}주</b> (미회수 수량 ${P.unrec ?? 0}주 우선 + 추가 매수 ${P.extra ?? 0}주)${P.shortfall > 0 ? `<br><b style="color:var(--red)">미회수 수량 매수에 ${money(it, P.shortfall)} 부족합니다. 추가 자금이 필요합니다.</b>` : ''}</div>
    <div class="tw" style="margin-top:8px"><table class="x"><tr><th>일차</th><th>일자</th><th>수량</th><th>체결가</th><th>금액</th></tr>${rows}</table></div>
    <div class="muted" style="margin-top:6px">남은 현금 ${money(it, I.cash)} · 현재 보유 ${I.hold}주</div>
+   ${(() => { const left = (it.stopBuys || []).filter(b => !num(b.p)).length, p = I.price; if (!left || !p) return '';
+     const done = (it.stopBuys || []).filter(b => num(b.p)).reduce((a, b) => a + num(b.q), 0), mand = Math.max(0, (P.unrec || 0) - done), px = p * (1 + bf);
+     const mq = Math.ceil(mand / left), ex = Math.max(0, Math.floor((I.cash - mand * px) / px)), eq = left === 1 ? ex : Math.floor(ex / left);
+     return `<div class="alert info" style="margin-top:6px">오늘 권장 매수: <b>${mq + eq}주</b> (미회수 ${mq}주 + 추가 ${eq}주) — 현재가 ${fp(it, p)}와 남은 현금으로 다시 계산한 수량입니다. 남은 ${left}일</div>`; })()}
    <div class="row"><button class="btn s g" onclick="A.undoStop()">STOP 취소</button></div></div>`;
 }
 
@@ -670,7 +766,7 @@ function vRounds(it, I) {
 }
 
 function roundCard(it, r, c) {
-  const o = OPEN[r.id] ?? (c.status !== 'done');
+  const o = OPEN[r.id] ?? (c.status !== 'done' || !!(liveReinv(it, r, c) || {}).qty);
   const head = `<div class="rhead" onclick="A.toggle('${r.id}')"><span class="t">${r.no}회차</span>${stBadge(c.status)}
     <span class="m">슬롯 ${r.slot} · 간격 ${r.gap}% · ${md(r.sells[0]?.d)}~${md(c.lastSell)}${c.avg ? ' · 평단 ' + fp(it, c.avg) : ''} · 이익 ${money(it, c.profit)}</span><span style="margin-left:auto">${o ? '▲' : '▼'}</span></div>`;
   if (!o) return `<div class="card">${head}</div>`;
@@ -725,7 +821,7 @@ function roundCard(it, r, c) {
    <button class="btn s g" onclick="A.delSell('${r.id}')">매도일 −</button>
    <button class="btn s r" onclick="A.delRound('${r.id}')" style="margin-left:auto">회차 삭제</button></div>`;
   if (c.status === 'buying' || c.status === 'paused') {
-    const half = Math.ceil(c.soldQ / 2);
+    const half = Math.ceil(c.soldQ * rec5Pct(advOf(it)) / 100);
     const G = signals(it);
     const wkC = G.t.bar ? G.t.bar.c : I_price(it);
     acts += `<details class="mini" data-k="bk-${r.id}"><summary>일괄 체결 입력 (남은 주문 ${c.openQ}주)</summary>
@@ -733,14 +829,32 @@ function roundCard(it, r, c) {
       <label class="f">평균 체결가<input id="bp_${r.id}" placeholder="예: 48.0881"></label>
       <button class="btn s" style="align-self:flex-end" onclick="A.bulk('${r.id}')">남은 주문 모두 체결</button></div>
       <div class="muted">지정가가 모두 현재가보다 높아(파란색) 한 번에 산 경우처럼, 같은 가격에 일괄 체결됐을 때 씁니다.</div></details>`;
-    if (c.status === 'buying') acts += `<details class="mini" data-k="rc-${r.id}"><summary>5주선 회복 처리 (50%까지 채우고 대기)</summary>
-      <div class="muted">현재 재매수 ${c.filledQ}주 / 50% 기준 ${half}주 → ${c.filledQ >= half ? '<b>이미 50% 이상: 추가 매수 없이 대기</b>' : `<b>${half - c.filledQ}주 추가 매수</b> 후 대기`}. 부족분은 높은 지정가 주문부터 차감합니다.</div>
+    if (c.status === 'buying') acts += `<details class="mini" data-k="rc-${r.id}"><summary>5주선 회복 처리 (${rec5Pct(advOf(it))}%까지 채우고 대기)</summary>
+      <div class="muted">현재 재매수 ${c.filledQ}주 / ${rec5Pct(advOf(it))}% 기준 ${half}주 → ${c.filledQ >= half ? `<b>이미 ${rec5Pct(advOf(it))}% 이상: 추가 매수 없이 대기</b>` : `<b>${half - c.filledQ}주 추가 매수</b> 후 대기`}. 부족분은 높은 지정가 주문부터 차감합니다.</div>
       <div class="row"><label class="f">매수일<input type="date" id="rd_${r.id}" value="${G.t.bar ? (G.t.bar.d2 || today()) : today()}"></label>
       <label class="f">매수가 (금요일 종가 또는 다음 거래일 시장가)<input id="rp_${r.id}" value="${wkC || ''}"></label>
       <button class="btn s o" style="align-self:flex-end" onclick="A.recover('${r.id}')">회복 처리</button></div></details>`;
     if (c.status === 'paused') acts += `<div class="alert" style="margin-top:8px">5주선 회복으로 대기 중입니다. 걸어둔 주문은 취소하세요. 5주선을 다시 이탈하면 남은 수량을 원래 지정가로 다시 겁니다.
       <button class="btn s" onclick="A.resume('${r.id}')">5주선 재이탈 → 주문 재개</button></div>`;
   }
+  const ch = liveChase(it, r, c), a6 = advOf(it);
+  if (advOf(it).on2 && (c.status === 'buying' || c.status === 'paused') && !r.chased) acts += `<details class="mini" data-k="ch-${r.id}" ${ch ? 'open' : ''}><summary>② 반등 추격 매수 기록 ${ch ? '— <b style="color:var(--org)">조건 충족</b>' : ''}</summary>
+      <div class="muted">${ch ? `판 뒤 최저 종가 ${fp(it, ch.mn)} → 최근 종가 ${fp(it, ch.last)} (+${(ch.up * 100).toFixed(1)}%). ` : `판 뒤 최저 종가보다 ${a6.chaseUp}% 반등하면 알려드립니다. `}미회수 ${c.soldQ - c.filledQ}주의 ${a6.chasePct}%를 되삽니다. 기록하면 높은 지정가 주문부터 수량이 줄어듭니다.</div>
+      <div class="row"><label class="f">매수일<input type="date" id="chd_${r.id}" value="${today()}"></label>
+      <label class="f">매수가<input id="chp_${r.id}" value="${curPrice(it) || ''}"></label>
+      <label class="f">수량<input id="chq_${r.id}" value="${Math.ceil((c.soldQ - c.filledQ) * num(a6.chasePct) / 100)}"></label>
+      <button class="btn s o" style="align-self:flex-end" onclick="A.chase('${r.id}')">추격 매수 기록</button>
+      <button class="btn s g" style="align-self:flex-end" onclick="A.chaseSkip('${r.id}')">이번 회차는 안 함</button></div></details>`;
+  const rv = liveReinv(it, r, c);
+  if (rv) acts += `<details class="mini" data-k="rv-${r.id}" open><summary>⑥ 차익금 재투자 기록 — 차익 ${money(it, rv.profit)}</summary>
+      <div class="muted">${rv.qty > 0 ? `재투자 가능 금액 ${money(it, rv.amt)}` : '지금은 못 되산 물량을 되살 돈이 부족해 재투자할 여유가 없습니다'}${rv.reserve > 0 ? ` · 못 되산 ${ic(it).unrec}주를 되살 돈 ${money(it, rv.reserve)}은 남겨둡니다` : ''}.</div>
+      <div class="row"><label class="f">매수일<input type="date" id="rvd_${r.id}" value="${today()}"></label>
+      <label class="f">매수가<input id="rvp_${r.id}" value="${curPrice(it) || ''}"></label>
+      <label class="f">수량<input id="rvq_${r.id}" value="${rv.qty}"></label>
+      <button class="btn s gr" style="align-self:flex-end" onclick="A.reinvest('${r.id}')">재투자 기록</button>
+      <button class="btn s g" style="align-self:flex-end" onclick="A.reinvSkip('${r.id}')">안 함</button></div></details>`;
+  const myRv = (it.reinvest || []).filter(x => x.rid === r.id);
+  if (myRv.length) acts += `<div class="muted" style="margin-top:6px">⑥ 재투자: ${myRv.map(x => `${md(x.d)} ${x.q}주 @ ${fp(it, num(x.p))} <a href="#" onclick="A.delReinv('${r.id}');return false">취소</a>`).join(', ')}</div>`;
   return `<div class="card">${head}<div style="margin-top:8px">${table}${acts}</div></div>`;
 }
 function I_price(it) { return curPrice(it) || ''; }
@@ -776,7 +890,7 @@ function sigCard(it, which, title, tk) {
    <div class="flag"><span>시작: 몸통 전체 30주선 아래 음봉</span>${yn(j.start)}</div>
    <div class="flag"><span>5주선 아래 (종가)</span>${yn(j.under5)}</div>
    <div class="flag"><span>5주선 회복: 몸통 전체 위</span>${yn(j.rec5)}</div>
-   <div class="flag"><span>STOP: 몸통 전체 30주선 위</span>${yn(j.stop)}</div>
+   <div class="flag"><span>STOP: 몸통 전체 ${stopN(advOf(it))}주선 위</span>${yn(j.stop)}</div>
    ${tbl}
    <details class="mini" data-k="mn-${which}"><summary>직접 입력 (자동 조회가 안 될 때)</summary>
     <div class="row">
@@ -879,6 +993,17 @@ function vGuide() {
     ${flow(['팔았던 주식을<br>더 싸게 되사요', '주식 수를 되찾고<br>현금이 남아요', '지금 주식 가치에<br>남은 현금을 더해요'])}
     <p>이 방법은 돈을 벌기 위한 것이라기보다, <b>하락장에서 덜 잃고 살아남기 위한 고육책</b>입니다.</p>`,
     '[대시보드]의 "계좌 평가(주식+현금)", "풍차 안 했을 때 대비", "본전 주가"(원래 매입단가 입력 시)에서 확인합니다.')}
+  ${sec('10', '개선안 (실험) — 약점 보완 규칙', `
+    <p>백테스트에서 이 방법은 <b>길게 이어지는 하락장(2022년)에서는 크게 이기고</b>, <b>급락 후 V자 반등(2018년, 2025년)에서는 조금 지는</b> 모습을 보였습니다. 지는 이유는 바닥 근처에서 판 물량을 되사지 못하고, STOP 때 비싸게 되사기 때문입니다. 아래 개선안은 이 약점을 줄이려는 <b>실험용 규칙</b>입니다.</p>
+    <table class="gt"><tr><th>① 바닥 이격 제한</th><td>30주선보다 일정 비율(기본 40%) 이상 아래면 새 회차를 보류합니다. 과매도 자리에서 파는 것을 피합니다.</td></tr>
+    <tr><th>② 반등 추격 매수</th><td>판 뒤 최저 종가보다 일정 비율(기본 20%) 반등하면 미회수 물량의 일부(기본 50%)를 바로 되삽니다. 주봉을 기다리지 않고 일봉으로 빨리 대응합니다.</td></tr>
+    <tr><th>③ 5주선 회복 채움 비율</th><td>5주선 회복 때 50% 대신 더 많이(기본 70%) 채웁니다.</td></tr>
+    <tr><th>④ STOP 기준선</th><td>30주선 대신 20주선(또는 10주선) 위 안착 시 STOP해서 덜 오른 가격에 되삽니다. 대신 하락장 중간 반등에 일찍 끝날 위험이 있습니다.</td></tr>
+    <tr><th>⑤ 변동성 기반 간격</th><td>간격표 대신 최근 20일 평균 변동폭(ATR)으로 1회차 간격을 정하고, 이후 회차는 간격표의 비율대로 줄입니다. 종목마다 간격을 따로 정할 필요가 없습니다.</td></tr>
+    <tr><th>⑥ 차익금 즉시 재투자</th><td>회차가 완료될 때마다 차익금으로 주식을 추가 매수해 주식 수를 바로 늘립니다 (셀프 리로드 방식). 다른 회차에 못 되산 물량이 있으면, 그 물량을 지금 가격으로 되살 돈은 남겨두고 나머지만 재투자합니다.</td></tr>
+    <tr><th>⑦ 미회수 한도</th><td>못 되산 물량이 운용 물량의 일정 비율(기본 50%) 이상이면 새 회차를 쉽니다.</td></tr></table>
+    <p><b>주의</b>: SOXL의 하락장은 몇 번뿐이라, 과거에 맞춰 숫자를 정교하게 고르면 다음 하락장에서는 안 맞을 수 있습니다(과최적화). <b>모든 구간에서 고르게 나아지는 개선안</b>만, 단순한 숫자로 쓰는 것이 좋습니다.</p>`,
+    '[백테스트] 탭 → 개선안을 켜고 [하락장 구간 일괄 실행]을 누르면 원래 규칙, 개선안 전부, 개선안 하나씩을 구간별로 비교합니다. 좋은 설정은 [이 개선안 설정을 실전 종목에 적용]으로 옮기고, [설정 → 개선안]에서 켜고 끌 수 있습니다. 실전에서는 대시보드 알림과 회차 화면의 기록 칸(②·⑥)으로 안내합니다.')}
   ${sec('+', '실전 메모와 용어', `
     <p><b>파란색 칸</b>: 매수 예정가가 최근 종가보다 높아 바로 매수가 가능한 경우입니다. 이때는 계산된 지정가 대신 <b>현재가 부근 지정가</b>로 주문하는 것이 유리합니다. (실전 예시 5회차: 지정가가 모두 전일 종가 48.76보다 높아 48.76에 나눠 주문 → 평균 48.0881 체결)</p>
     <p><b>15% 이상 급락한 다음 날</b>: 정규장이 상승 출발할 확률이 높다고 보고 프리장에서 매수한 사례가 있습니다. 규칙이 아니라 글쓴이의 개인 판단입니다.</p>
@@ -916,6 +1041,10 @@ function vSet(it) {
    <label><input type="checkbox" ${it.lateEntry ? 'checked' : ''} onchange="A.set('lateEntry',this.checked)"> 하락이 많이 진행된 뒤 늦게 진입 — 처음부터 마지막 간격(${it.gaps[it.gaps.length - 1]}%) 사용</label>
    <div class="muted">국내 기본값은 SOXL(3배 레버리지)보다 변동성이 작은 국내 2배 레버리지·대형 ETF를 고려해 미국 기본값의 약 60%로 잡았습니다. 종목 변동성에 맞게 조정하세요.</div>
   </div>
+  <div class="card"><h3>개선안 (실험 · 기본 꺼짐)</h3>
+   <div class="muted">원래 규칙을 보완하는 실험용 규칙입니다. 켜면 대시보드 알림, 출발 판단, 간격, STOP 기준이 바뀝니다. <b>[백테스트] 탭에서 원래 규칙과 비교해 모든 하락장 구간에서 나아지는 것만 켜세요.</b></div>
+   ${advForm(advOf(it), 'advSet')}
+  </div>
   <div class="card"><h3>휴장일 (${it.market === 'US' ? '미국 NYSE' : '국내 KRX'})</h3>
    <div class="muted">매도일 생성, 출발 가능일, "다음 거래일" 계산에서 주말과 휴장일을 건너뜁니다. ${it.market === 'US' ? '조기폐장일(뉴욕 13:00 마감)은 종가 확정 시각에 반영됩니다.' : '2027년 국내 휴장일은 정부 월력요항 기준 예상치입니다. 거래소 공지를 확인하세요.'} 지난 휴장일은 시세 조회 때 자동으로 보완됩니다.</div>
    <div class="muted" style="margin-top:6px"><b>앞으로 90일</b>: ${(() => { const t = today(), e = addDays(t, 90); const m = holMap(it.market); const l = Object.keys(m).filter(d => d >= t && d <= e).map(d => [d, m[d]]); const ea = Object.keys(EARLY[it.market] || {}).filter(d => d >= t && d <= e).map(d => [d, '조기폐장(13시)']); return [...l, ...ea].sort((x, y) => x[0] < y[0] ? -1 : 1).map(x => md(x[0]) + ' ' + x[1]).join(' · ') || '없음'; })()}</div>
@@ -941,6 +1070,7 @@ function vSet(it) {
     <button class="btn s g" onclick="A.loadExample()">실전 예시 불러오기 (SOXL 1~7회차)</button>
     <button class="btn s r" onclick="A.delItem()" style="margin-left:auto">이 종목 삭제</button></div>
    <div class="muted">데이터는 이 기기 브라우저에 자동 저장됩니다. 기기를 바꾸거나 브라우저 데이터를 지우기 전에 백업하세요.</div>
+   <div class="muted" style="margin-top:6px">앱 버전: <b>풍차돌리기 매니저 ${APP_VER}</b></div>
   </div>
   <div class="card"><h3>사용 순서</h3><ol class="muted">
    <li>시작 신호(주봉 몸통 전체가 30주선 아래 음봉) 확인 → [대시보드]에서 1회차 출발</li>
@@ -986,6 +1116,8 @@ const A = {
     const sv = x => x === 'mixed' ? 'SOXX·SOXL(종목·기준지수) 신호가 엇갈립니다' : x == null ? '주봉 신호 데이터가 없습니다' : '';
     if (np.no === 1 && v.start !== true && !confirm(`시작 신호가 없습니다.\n${sv(v.start) || '주봉 몸통 전체가 30주선 아래인 음봉이 아닙니다'}\n그래도 1회차를 출발할까요?`)) return;
     if (!np.initial && v.under5 !== true && !confirm(`5주선 아래가 아닙니다.\n${sv(v.under5) || '주봉 종가가 5주선 위입니다 (새 회차 대기)'}\n그래도 ${np.no}회차를 출발할까요?`)) return;
+    const hr = liveHold(it, I, signals(it));
+    if (hr.length && !confirm(`개선안 보류 조건에 걸립니다.\n${hr.join('\n')}\n그래도 ${np.no}회차를 출발할까요?`)) return;
     if (d < np.earliest && !confirm(`출발 가능일(${md(np.earliest)})보다 이릅니다. 그래도 출발할까요?`)) return;
     const qs = splitQty(slotQty(it), num(it.sellDays));
     const sells = []; let x = d;
@@ -1065,25 +1197,36 @@ const A = {
   },
   recover(id) {
     const it = IT(), r = RD(it, id), c = rc(it, r);
-    const half = Math.ceil(c.soldQ / 2);
+    const half = Math.ceil(c.soldQ * rec5Pct(advOf(it)) / 100);
     let need = half - c.filledQ;
     if (need > 0) {
       const d = $('rd_' + id).value || today(), p = num($('rp_' + id).value);
       if (!p) return toast('매수가를 입력하세요');
       r.extras = r.extras || [];
-      r.extras.push({ d, q: need, p, kind: '5주선 회복 50% 채움' });
-      for (const o of r.orders) {
-        if (need <= 0) break;
-        const filled = num(o.fq) && num(o.fp) ? num(o.fq) : 0;
-        const open = num(o.qty) - filled;
-        if (open <= 0) continue;
-        const take = Math.min(open, need);
-        o.qty = num(o.qty) - take; need -= take;
-      }
+      r.extras.push({ d, q: need, p, kind: `5주선 회복 ${rec5Pct(advOf(it))}% 채움` });
+      reduceOrders(r.orders, need, o => num(o.fq) && num(o.fp) ? num(o.fq) : 0);
       toast(`${half - c.filledQ}주 추가 매수 후 대기합니다`);
-    } else toast('이미 50% 이상 매수 — 추가 매수 없이 대기합니다');
+    } else toast(`이미 ${rec5Pct(advOf(it))}% 이상 매수 — 추가 매수 없이 대기합니다`);
     r.paused = true; render();
   },
+  chase(id) {
+    const it = IT(), r = RD(it, id);
+    const d = $('chd_' + id).value || today(), p = num($('chp_' + id).value), q = Math.floor(num($('chq_' + id).value));
+    if (!p || !q) return toast('매수가와 수량을 입력하세요');
+    r.extras = r.extras || []; r.extras.push({ d, q, p, kind: '② 반등 추격' });
+    reduceOrders(r.orders, q, o => num(o.fq) && num(o.fp) ? num(o.fq) : 0);
+    r.chased = true; toast(`${q}주 반등 추격 매수를 기록했습니다. 증권사의 남은 지정가 주문 수량을 줄이세요`); render();
+  },
+  chaseSkip(id) { const r = RD(IT(), id); r.chased = 'skip'; render(); },
+  reinvest(id) {
+    const it = IT(), d = $('rvd_' + id).value || today(), p = num($('rvp_' + id).value), q = Math.floor(num($('rvq_' + id).value));
+    if (!p || !q) return toast('매수가와 수량을 입력하세요');
+    it.reinvest = it.reinvest || []; it.reinvest.push({ d, q, p, rid: id }); RD(it, id).reinvested = true;
+    toast(`${q}주 재투자를 기록했습니다`); render();
+  },
+  reinvSkip(id) { RD(IT(), id).reinvested = 'skip'; render(); },
+  delReinv(id) { const it = IT(); if (!confirm('이 회차의 재투자 기록을 취소할까요?')) return; it.reinvest = (it.reinvest || []).filter(x => x.rid !== id); RD(it, id).reinvested = false; render(); },
+  advSet(k, v, t) { const it = IT(); it.adv = advOf(it); it.adv[k] = t === 'number' ? num(v) : v; if (k === 'on6' && v) it.adv.on6Since = today(); render(); },
   resume(id) { const it = IT(), r = RD(it, id); r.paused = false; toast('남은 지정가 주문을 다시 거세요'); render(); },
   setEx(id, i, k, v) { const it = IT(), r = RD(it, id); r.extras[i][k] = k === 'd' ? v : num(v); render(); },
 
@@ -1209,12 +1352,14 @@ function btDefaults(it) {
     market: it.market, krType: it.krType, ticker: it.ticker, indexTicker: it.indexTicker,
     totalQty: it.totalQty, coreQty: it.coreQty, slots: it.slots, sellDays: it.sellDays,
     gaps: it.gaps.slice(), lateEntry: false, buyFee: it.buyFee, sellFee: it.sellFee, sellTax: it.sellTax, minGap: it.minGap,
-    preset: 0, start: '2000-01-01', end: '2099-12-31', mix: 'both', startMode: 'signal', useRec5: true, useStop: true, compare: true
+    preset: 0, start: '2000-01-01', end: '2099-12-31', mix: 'both', startMode: 'signal', useRec5: true, useStop: true, compare: true,
+    adv: { ...advOf(it) }, eachAdv: true
   };
 }
 function BTP() { if (!S.bt) S.bt = btDefaults(IT()); return S.bt; }
 
 function btRun(P, T, X, opt = {}) {
+  const adv = opt.adv || advOf(P);
   const mul = opt.mul || 1;
   const gaps = P.gaps.map(g => Math.round(num(g) * mul * 1000) / 1000);
   const bf = num(P.buyFee) / 100, sf = (num(P.sellFee) + num(P.sellTax)) / 100;
@@ -1231,84 +1376,117 @@ function btRun(P, T, X, opt = {}) {
   if (s0 < 0 || e0 <= s0) return { err: '이 기간에 데이터가 없습니다' };
   if (Math.floor((total0 - Math.round(total0 * coreRatio)) / slots) < nDays) return { err: '회차당 수량이 매도 일수보다 작습니다' };
 
+  const sN = stopN(adv), rPct = rec5Pct(adv);
   const wT = weekly(T), tMap = new Map(wT.map(w => [w.k, w]));
   const wX = X && X.length ? weekly(X) : null, xMap = wX ? new Map(wX.map(w => [w.k, w])) : null;
   const comb = k => {
-    const jt = judge(tMap.get(k)); if (!jt) return null;
-    const jx = xMap ? judge(xMap.get(k)) : null;
+    const jt = judge(tMap.get(k), sN); if (!jt) return null;
+    const jx = xMap ? judge(xMap.get(k), sN) : null;
     if (!jx || P.mix === 'ticker') return jt;
     if (P.mix === 'index') return jx;
     const o = {}; ['start', 'stop', 'rec5', 'under5'].forEach(q => o[q] = !!(jt[q] && jx[q])); return o;
   };
   const R = [], cycles = [], eq = [], ev = [], weeks = [];
-  let hold = total0, cash = 0, sig = null, cyc = null, stopBuy = null, noSeq = 0, maxUnrec = 0, minCash = 0;
-  // 시작 직전에 확정된 주봉 신호
+  let hold = total0, cash = 0, sig = null, lastWk = null, cyc = null, stopBuy = null, noSeq = 0, maxUnrec = 0, minCash = 0, blocked = 0;
   const k0 = monday(T[s0][0]);
-  for (let k = wT.length - 1; k >= 0; k--) if (wT[k].k < k0) { sig = comb(wT[k].k); break; }
+  for (let k = wT.length - 1; k >= 0; k--) if (wT[k].k < k0) { sig = comb(wT[k].k); lastWk = wT[k]; break; }
   let pendStart = P.startMode === 'immediate' ? s0 : (sig && sig.start ? s0 : -1);
   const bought = r => r.orders.reduce((a, o) => a + o.fq, 0) + r.extras.reduce((a, e) => a + e.q, 0);
-
+  const profitOf = r => { const an = r.avg * (1 - sf); return r.orders.reduce((a, od) => a + od.fq * an - od.cost * (1 + bf), 0) + r.extras.reduce((a, e) => a + e.q * (an - e.p * (1 + bf)), 0); };
+  const markDone = (r, i) => { if (r.doneIdx == null && bought(r) >= r.sold) { r.doneIdx = i; if (adv.on6) r.reinvPend = true; } };
+  const buyExtra = (r, i, q, px, kind) => { if (q <= 0) return; hold += q; cash -= q * px * (1 + bf); r.extras.push({ i, q, p: px, kind }); reduceOrders(r.orders, q, o => o.fq); };
+  // 새 회차 보류 사유 (① 바닥 이격, ⑦ 미회수 한도)
+  const holdReason = i => {
+    if (adv.on1 && lastWk && lastWk.ma30 && i > 0 && T[i - 1][4] / lastWk.ma30 - 1 <= -num(adv.oversold) / 100) return 'on1';
+    if (adv.on7 && cyc) { const un = cyc.rounds.reduce((a, r) => a + r.sold - bought(r), 0); if (un >= num(adv.maxUnrecPct) / 100 * slots * cyc.slotQ) return 'on7'; }
+    return '';
+  };
   const createRound = (i, slot, srcDone) => {
     const cn = cyc.rounds.length + 1;
-    const gap = P.lateEntry ? gaps[gaps.length - 1] : gaps[Math.min(cn - 1, gaps.length - 1)];
-    const r = { no: ++noSeq, cyc: cycles.length, cn, slot, gap, startIdx: i, sells: splitQty(cyc.slotQ, nDays).map((q, k) => ({ idx: i + k, q, p: null })), sold: 0, amt: 0, avg: 0, orders: [], extras: [], activeFrom: null, paused: false, rec5Pend: false, doneIdx: null, srcDone, stopped: false };
+    const gi = P.lateEntry ? gaps.length - 1 : Math.min(cn - 1, gaps.length - 1);
+    const gap = advGap(adv, gaps, gi, adv.on5 ? atrPct(T, i - 1) : null);
+    const r = { no: ++noSeq, cyc: cycles.length, cn, slot, gap, startIdx: i, sells: splitQty(cyc.slotQ, nDays).map((q, k) => ({ idx: i + k, q, p: null })), sold: 0, amt: 0, avg: 0, orders: [], extras: [], activeFrom: null, paused: false, rec5Pend: false, chasePend: false, chased: false, reinvPend: false, reinvQ: 0, minC: Infinity, doneIdx: null, srcDone, stopped: false };
     R.push(r); cyc.rounds.push(r);
   };
   const startCycle = i => {
     const core = Math.round(hold * coreRatio);
-    cyc = { startIdx: i, total: hold, core, slotQ: Math.floor((hold - core) / slots), rounds: [], stopIdx: null, endIdx: null };
+    cyc = { no: cycles.length + 1, startIdx: i, total: hold, core, slotQ: Math.floor((hold - core) / slots), rounds: [], stopIdx: null, endIdx: null, reinvQ: 0, stop: null };
     cycles.push(cyc); ev.push({ i, t: `풍차 시작 (${hold}주 중 ${hold - core}주 운용)` });
     createRound(i, 1, null);
   };
   const tryStart = i => {
     const cr = cyc.rounds;
-    if (cr.length < slots) { // 1회차 첫 주, 2회차 다음 주 …
-      if (monday(T[i][0]) > monday(T[cr[cr.length - 1].startIdx][0])) createRound(i, cr.length + 1, null);
-      return;
+    const ready = cr.length < slots
+      ? monday(T[i][0]) > monday(T[cr[cr.length - 1].startIdx][0]) // 1회차 첫 주, 2회차 다음 주 …
+      : !!(sig && sig.under5);                                       // 3회차부터: 재매수 완료 + 5주선 아래
+    if (!ready) return;
+    let slot = null, src = null;
+    if (cr.length < slots) slot = cr.length + 1;
+    else {
+      const frees = [];
+      for (let s = 1; s <= slots; s++) { const l = cr.filter(r => r.slot === s).pop(); if (l && l.doneIdx != null && l.doneIdx < i) frees.push(l); }
+      frees.sort((a, b) => a.doneIdx - b.doneIdx);
+      for (const l of frees) {
+        const sib = cr.find(r => r.srcDone != null && r.srcDone === l.doneIdx);
+        if (sib && i < sib.startIdx + num(P.minGap)) continue; // 같은 날 완료 → 2~3일 차이
+        slot = l.slot; src = l.doneIdx; break;
+      }
     }
-    if (!sig || !sig.under5) return; // 3회차부터: 재매수 완료 + 5주선 아래
-    const frees = [];
-    for (let s = 1; s <= slots; s++) { const l = cr.filter(r => r.slot === s).pop(); if (l && l.doneIdx != null && l.doneIdx < i) frees.push(l); }
-    frees.sort((a, b) => a.doneIdx - b.doneIdx);
-    for (const l of frees) {
-      const sib = cr.find(r => r.srcDone != null && r.srcDone === l.doneIdx);
-      if (sib && i < sib.startIdx + num(P.minGap)) continue; // 같은 날 완료 → 2~3일 차이
-      createRound(i, l.slot, l.doneIdx); break;
-    }
+    if (slot == null) return;
+    const why = holdReason(i);
+    if (why) { blocked++; return; }
+    createRound(i, slot, src);
   };
   const doStop = i => {
     cyc.stopped = true; cyc.stopIdx = i;
-    let unrec = 0;
-    cyc.rounds.forEach(r => { if (r.doneIdx == null) r.stopped = true; unrec += r.sold - bought(r); });
-    const px = T[i][4] * (1 + bf);
-    const extra = Math.max(0, Math.floor((cash - unrec * px) / px));
+    let unrec = 0, unrecAmt = 0;
+    cyc.rounds.forEach(r => { if (r.doneIdx == null) r.stopped = true; const u = r.sold - bought(r); unrec += u; unrecAmt += u * r.avg; });
     const idxs = []; for (let k = i + 1; k <= Math.min(e0, i + nDays); k++) idxs.push(k);
-    ev.push({ i, t: `STOP 신호 — 미회수 ${unrec}주 + 추가 ${extra}주 매수 예정` });
-    if (idxs.length) stopBuy = { idxs, qtys: splitQty(unrec + extra, idxs.length) };
+    cyc.stop = { unrec, sellAvg: unrec ? unrecAmt / unrec : 0, q: 0, cost: 0, mandQ: 0 };
+    ev.push({ i, t: `STOP 신호 (${sN}주선) — 미회수 ${unrec}주, 다음 ${idxs.length}거래일 종가로 되사기` });
+    if (idxs.length) stopBuy = { idxs, k: 0, mand: unrec };
     else { cyc.endIdx = i; cyc = null; }
   };
 
   for (let i = s0; i <= e0; i++) {
     const [d, o, , l, c] = T[i];
-    // STOP 분할 종가 매수
-    if (stopBuy) {
-      const k = stopBuy.idxs.indexOf(i);
-      if (k >= 0) { const q = stopBuy.qtys[k]; hold += q; cash -= q * c * (1 + bf); }
-      if (i >= stopBuy.idxs[stopBuy.idxs.length - 1]) { cyc.endIdx = i; ev.push({ i, t: `STOP 매수 완료 — 보유 ${hold}주` }); cyc = null; stopBuy = null; }
+    // STOP 분할 종가 매수 — 매일 남은 현금 기준으로 수량 재계산
+    if (stopBuy && stopBuy.idxs[stopBuy.k] === i) {
+      const left = stopBuy.idxs.length - stopBuy.k, px = c * (1 + bf);
+      const mandQ = Math.ceil(stopBuy.mand / left);
+      const extraAff = Math.max(0, Math.floor((cash - stopBuy.mand * px) / px));
+      const extraQ = left === 1 ? extraAff : Math.floor(extraAff / left);
+      const q = mandQ + extraQ;
+      hold += q; cash -= q * px; stopBuy.mand -= mandQ; stopBuy.k++;
+      cyc.stop.q += q; cyc.stop.cost += q * px; cyc.stop.mandQ += mandQ;
+      if (stopBuy.k >= stopBuy.idxs.length) { cyc.endIdx = i; ev.push({ i, t: `STOP 매수 완료 — 보유 ${hold}주` }); cyc = null; stopBuy = null; }
     }
     // 회차 출발
     if (cyc && !cyc.stopped) tryStart(i);
-    else if (!cyc && !stopBuy && pendStart === i) startCycle(i);
+    else if (!cyc && !stopBuy && pendStart === i) { if (adv.on1 && holdReason(i)) { pendStart = i + 1; blocked++; } else startCycle(i); }
     if (cyc && !cyc.stopped) {
-      // 5주선 회복: 다음 거래일 시가로 50%까지 채우고 대기
-      for (const r of cyc.rounds) if (r.rec5Pend) {
-        r.rec5Pend = false;
-        let need = Math.ceil(r.sold / 2) - bought(r);
-        if (need > 0) {
-          hold += need; cash -= need * o * (1 + bf); r.extras.push({ i, q: need, p: o });
-          for (const od of r.orders) { if (need <= 0) break; const op = od.qty - od.fq; if (op <= 0) continue; const t = Math.min(op, need); od.qty -= t; need -= t; }
+      for (const r of cyc.rounds) {
+        if (r.stopped) continue;
+        // ⑥ 차익금 재투자 (다음 거래일 시가)
+        if (r.reinvPend) { // 못 되산 물량을 되살 돈(현재가 기준)은 남겨두고 재투자
+          r.reinvPend = false; const px = o * (1 + bf);
+          const un = cyc.rounds.reduce((a, x) => a + x.sold - bought(x), 0);
+          const amt = Math.min(profitOf(r), cash - un * px), q = amt > 0 ? Math.floor(amt / px) : 0;
+          if (q > 0) { hold += q; cash -= q * px; r.reinvQ = q; cyc.reinvQ += q; }
         }
-        if (bought(r) >= r.sold) r.doneIdx = i; else r.paused = true;
+        if (r.doneIdx != null) continue;
+        // 5주선 회복: 다음 거래일 시가로 정해진 비율까지 채우고 대기
+        if (r.rec5Pend) {
+          r.rec5Pend = false;
+          buyExtra(r, i, Math.ceil(r.sold * rPct / 100) - bought(r), o, '5주선 회복');
+          markDone(r, i); if (r.doneIdx == null) r.paused = true;
+        }
+        // ② 반등 추격 매수 (다음 거래일 시가)
+        if (r.chasePend && r.doneIdx == null) {
+          r.chasePend = false;
+          buyExtra(r, i, Math.ceil((r.sold - bought(r)) * num(adv.chasePct) / 100), o, '② 반등 추격');
+          markDone(r, i);
+        }
       }
       // 지정가 체결
       for (const r of cyc.rounds) {
@@ -1318,7 +1496,7 @@ function btRun(P, T, X, opt = {}) {
           const px = o <= od.limit ? o : (l <= od.limit ? od.limit : null);
           if (px != null) { od.fq += op; od.cost += op * px; od.fd = i; hold += op; cash -= op * px * (1 + bf); }
         }
-        if (bought(r) >= r.sold) r.doneIdx = i;
+        markDone(r, i);
       }
       // MOC 매도
       for (const r of cyc.rounds) {
@@ -1329,6 +1507,9 @@ function btRun(P, T, X, opt = {}) {
           r.orders = splitQty(r.sold, r.sells.length).map((q, k) => ({ n: k + 1, limit: rp(pit, r.avg * Math.pow(1 - r.gap / 100, k + 1)), qty: q, fq: 0, cost: 0, fd: null }));
           r.activeFrom = i + 1;
         }
+        // ② 판 뒤 최저 종가 추적 → 반등 감지
+        if (r.startIdx <= i) r.minC = Math.min(r.minC, c);
+        if (adv.on2 && !r.chased && r.activeFrom != null && r.activeFrom <= i + 1 && r.doneIdx == null && c >= r.minC * (1 + num(adv.chaseUp) / 100)) { r.chased = true; r.chasePend = true; }
       }
     }
     const un = cyc ? cyc.rounds.reduce((a, r) => a + r.sold - bought(r), 0) : 0;
@@ -1336,9 +1517,9 @@ function btRun(P, T, X, opt = {}) {
     eq.push([d, hold * c + cash, total0 * c, cyc ? 1 : 0]);
     // 주 마감 → 신호 확정 (다음 거래일부터 적용)
     if (i < T.length - 1 && monday(T[i + 1][0]) !== monday(d)) {
-      sig = comb(monday(d));
-      { const k = monday(d), wt = tMap.get(k), wx = xMap ? xMap.get(k) : null;
-        weeks.push({ k, d, t: wt, jt: judge(wt), x: wx, jx: wx ? judge(wx) : null, s: sig, running: !!cyc && !cyc.stopped }); }
+      const k = monday(d);
+      sig = comb(k); lastWk = tMap.get(k) || lastWk;
+      { const wt = tMap.get(k), wx = xMap ? xMap.get(k) : null; weeks.push({ k, d, t: wt, jt: judge(wt, sN), x: wx, jx: wx ? judge(wx, sN) : null, s: sig, running: !!cyc && !cyc.stopped }); }
       if (!cyc && !stopBuy) { if (sig && sig.start) pendStart = i + 1; }
       else if (cyc && !cyc.stopped && sig) {
         if (P.useStop && sig.stop) doStop(i);
@@ -1352,14 +1533,24 @@ function btRun(P, T, X, opt = {}) {
   const P0 = T[s0][4], P1 = T[e0][4], init = total0 * P0, fin = hold * P1 + cash, bhFin = total0 * P1;
   const mdd = k => { let pk = -Infinity, m = 0; eq.forEach(x => { pk = Math.max(pk, x[k]); m = Math.min(m, x[k] / pk - 1); }); return m; };
   R.forEach(r => {
-    const an = r.avg * (1 - sf);
-    r.profit = r.orders.reduce((a, od) => a + od.fq * an - od.cost * (1 + bf), 0) + r.extras.reduce((a, e) => a + e.q * (an - e.p * (1 + bf)), 0);
+    r.profit = profitOf(r);
     r.status = r.doneIdx != null ? 'done' : r.stopped ? 'stopped' : r.activeFrom == null ? 'selling' : r.paused ? 'paused' : 'buying';
     r.got = bought(r);
   });
+  // 사이클별 손익
+  cycles.forEach(cy => {
+    cy.profit = cy.rounds.reduce((a, r) => a + r.profit, 0);
+    cy.done = cy.rounds.filter(r => r.doneIdx != null).length;
+    cy.chase = cy.rounds.filter(r => r.extras.some(e => e.kind === '② 반등 추격')).length;
+    if (cy.stop && cy.stop.q) {
+      const st = cy.stop, avgPx = st.cost / st.q;
+      st.avgPx = avgPx; st.extraQ = st.q - st.mandQ;
+      st.loss = st.mandQ * (st.sellAvg * (1 - sf) - avgPx); // 미회수 물량을 판 값 − 되산 값
+    }
+  });
   return {
     d0: T[s0][0], d1: T[e0][0], s0, e0, init, fin, bhFin, retS: fin / init - 1, retB: bhFin / init - 1,
-    hold, cash, total0, mddS: mdd(1), mddB: mdd(2), rounds: R, cycles, ev, eq, maxUnrec, minCash, T, gaps, weeks, hasX: !!xMap
+    hold, cash, total0, mddS: mdd(1), mddB: mdd(2), rounds: R, cycles, ev, eq, maxUnrec, minCash, T, gaps, weeks, hasX: !!xMap, blocked, adv
   };
 }
 
@@ -1408,7 +1599,7 @@ function btSummary(P, res, title) {
     <div class="kpi"><div class="l">기간</div><div class="v" style="font-size:13px">${res.d0} ~ ${res.d1}</div><div class="s">${title || ''}</div></div>
     <div class="kpi"><div class="l">풍차 수익률</div><div class="v ${cls(res.retS)}">${pct(res.retS, 1)}</div><div class="s">주식+현금 기준</div></div>
     <div class="kpi"><div class="l">그냥 보유 수익률</div><div class="v ${cls(res.retB)}">${pct(res.retB, 1)}</div><div class="s">${res.total0}주 계속 보유</div></div>
-    <div class="kpi"><div class="l">차이</div><div class="v ${cls(ex)}">${ex >= 0 ? '+' : ''}${(ex * 100).toFixed(1)}%p</div><div class="s">최종 ${money(it, res.fin)} vs ${money(it, res.bhFin)}</div></div>
+    <div class="kpi"><div class="l">차이</div><div class="v ${cls(ex)}">${ex >= 0 ? '+' : ''}${(ex * 100).toFixed(1)}%p</div><div class="s">최종 ${money(it, res.fin)} vs ${money(it, res.bhFin)} · 그냥 보유의 <b>${((1 + res.retS) / (1 + res.retB)).toFixed(2)}배</b></div></div>
     <div class="kpi"><div class="l">최종 보유 주식</div><div class="v">${res.hold.toLocaleString()}주</div><div class="s ${cls(dShares)}">시작 대비 ${dShares >= 0 ? '+' : ''}${dShares.toLocaleString()}주 · 현금 ${money(it, res.cash)}</div></div>
     <div class="kpi"><div class="l">최대 낙폭 (MDD)</div><div class="v">${pct(res.mddS, 1)}</div><div class="s">그냥 보유 ${pct(res.mddB, 1)}</div></div>
     <div class="kpi"><div class="l">회차</div><div class="v">${res.rounds.length}회</div><div class="s">재매수 완료 ${done} · 풍차 ${res.cycles.length}번 시작 · STOP ${res.cycles.filter(c => c.stopIdx != null).length}번</div></div>
@@ -1458,11 +1649,27 @@ function vBacktest(it) {
     <label><input type="checkbox" ${P.useStop ? 'checked' : ''} onchange="A.btSet('useStop',this.checked)"> STOP 규칙 (30주선 위 안착)</label>
     <label><input type="checkbox" ${P.compare ? 'checked' : ''} onchange="A.btSet('compare',this.checked)"> 간격 비교 (×0.8, ×1.2)</label>
    </div>
+   <div style="margin-top:10px"><b style="font-size:13px">개선안 (실험)</b> <span class="muted">— 켜면 원래 규칙과 나란히 비교합니다</span></div>
+   ${advForm(advOf(P), 'btAdv')}
+   <div class="row">
+    <label><input type="checkbox" ${P.eachAdv ? 'checked' : ''} onchange="A.btSet('eachAdv',this.checked)"> 켠 개선안을 하나씩 따로도 비교</label>
+    <button class="btn s g" onclick="A.btAdvToItem()">이 개선안 설정을 실전 종목에 적용</button>
+   </div>
    <div class="row"><button class="btn gr" onclick="A.btRunOne()">▶ 백테스트 실행</button><button class="btn" onclick="A.btBatch()">▶ 하락장 구간 일괄 실행</button></div>
   </div>`;
   if (BTR && BTR.main && !BTR.main.err) {
     const r = BTR.main;
     out += `<div class="card"><h3>③ 결과 — ${esc(P.ticker)} ${esc(BTR.title)}</h3>${btSummary(P, r, BTR.title)}<div style="margin-top:10px">${btChart(r)}</div>`;
+    if (BTR.cmp) {
+      out += `<div style="margin-top:10px"><b style="font-size:13px">원래 규칙 vs 개선안</b> <span class="muted">(위 요약·그래프는 개선안 결과)</span></div><div class="tw"><table class="x"><tr><th>규칙</th><th>풍차</th><th>보유 대비</th><th>최종 주식</th><th>현금</th><th>MDD</th><th>회차</th><th>STOP</th></tr>` +
+        BTR.cmp.map(v => { const x = v.res; return x.err ? '' : `<tr><td class="c" style="text-align:left">${v.label}</td><td class="${cls(x.retS)}">${pct(x.retS, 1)}</td><td class="${cls(x.retS - x.retB)}"><b>${((x.retS - x.retB) * 100).toFixed(1)}%p</b></td><td>${x.hold.toLocaleString()}</td><td>${money(pit, x.cash)}</td><td>${pct(x.mddS, 1)}</td><td>${x.rounds.length}</td><td>${x.cycles.filter(c => c.stopIdx != null).length}</td></tr>`; }).join('') + `</table></div>`;
+    }
+    if (r.cycles.length) {
+      out += `<div style="margin-top:10px"><b style="font-size:13px">사이클별 손익</b></div><div class="tw"><table class="x"><tr><th>사이클</th><th>시작</th><th>STOP</th><th>회차 (완료)</th><th>회차 차익</th><th>STOP 때 미회수</th><th>판 평단 → 되산 평단</th><th>미회수 손익</th><th>추가 매수</th>${r.adv.on6 ? '<th>재투자</th>' : ''}${r.adv.on2 ? '<th>추격</th>' : ''}</tr>` +
+        r.cycles.map(cy => { const st = cy.stop; return `<tr><td class="c">${cy.no}</td><td class="c">${r.T[cy.startIdx][0]}</td><td class="c">${cy.stopIdx != null ? r.T[cy.stopIdx][0] : '진행 중'}</td><td class="c">${cy.rounds.length} (${cy.done})</td><td class="${cls(cy.profit)}">${famt(cy.profit)}</td>
+          <td>${st ? st.unrec + '주' : '-'}</td><td class="c">${st && st.mandQ ? fp(pit, st.sellAvg) + ' → ' + fp(pit, st.avgPx) : '-'}</td><td class="${st && st.loss != null ? cls(st.loss) : ''}">${st && st.loss != null ? famt(st.loss) : '-'}</td><td>${st && st.q != null ? (st.extraQ || 0) + '주' : '-'}</td>${r.adv.on6 ? `<td>${cy.reinvQ}주</td>` : ''}${r.adv.on2 ? `<td>${cy.chase}회</td>` : ''}</tr>`; }).join('') +
+        `</table></div><div class="muted">회차 차익: 재매수된 물량의 이익 합계 · 미회수 손익: STOP 때 못 되산 물량을 판 값과 되산 값의 차이 · 추가 매수: STOP 때 남은 현금으로 더 산 주식${r.blocked ? ` · 개선안 ①/⑦로 새 회차를 보류한 날 ${r.blocked}일` : ''}</div>`;
+    }
     if (BTR.vars) {
       out += `<div style="margin-top:10px"><b style="font-size:13px">간격 비교</b></div><div class="tw"><table class="x"><tr><th>간격</th><th>풍차</th><th>보유</th><th>차이</th><th>최종 주식</th><th>회차</th><th>MDD</th></tr>` +
         BTR.vars.map(v => { const x = v.res; return x.err ? '' : `<tr><td class="c">${v.label}<br><span class="muted">${x.gaps.join('·')}</span></td><td class="${cls(x.retS)}">${pct(x.retS, 1)}</td><td>${pct(x.retB, 1)}</td><td class="${cls(x.retS - x.retB)}">${((x.retS - x.retB) * 100).toFixed(1)}%p</td><td>${x.hold.toLocaleString()}</td><td>${x.rounds.length}</td><td>${pct(x.mddS, 1)}</td></tr>`; }).join('') + `</table></div>`;
@@ -1483,7 +1690,22 @@ function vBacktest(it) {
       r.rounds.map(x => `<tr><td class="c">${x.no}${r.cycles.length > 1 ? `<span class="muted"> (${x.cyc}-${x.cn})</span>` : ''}</td><td class="c">${x.slot}</td><td>${x.gap}%</td><td class="c">${r.T[x.startIdx][0]}</td><td>${fp(pit, x.avg)}</td><td>${x.got}/${x.sold}</td><td class="c">${x.doneIdx != null ? r.T[x.doneIdx][0] : '-'}</td><td>${x.doneIdx != null ? x.doneIdx - x.sells[x.sells.length - 1].idx : '-'}</td><td class="${cls(x.profit)}">${famt(x.profit)}</td><td class="c">${stBadge(x.status) || ''}</td></tr>`).join('') + `</table></div></details>`;
     out += `</div>`;
   } else if (BTR && BTR.main && BTR.main.err) out += `<div class="card alert bad">${esc(BTR.main.err)}</div>`;
-  if (BTB) {
+  if (BTB && BTB.cols) {
+    const cols = BTB.cols;
+    const isAll = b => b.n === '전체 기간';
+    const ratio = x => (1 + x.retS) / (1 + x.retB);
+    const subs = BTB.rows.filter(b => !isAll(b) && !b.res[0].err); // 하락장 구간만
+    out += `<div class="card"><h3>③ 하락장 구간 일괄 결과 — ${esc(P.ticker)}</h3><div class="muted">하락장 구간은 <b>그냥 보유 대비 차이(%p)</b>, 전체 기간은 <b>그냥 보유 대비 최종 자산 배수</b>입니다. 괄호는 최종 주식 수 변화입니다.</div><div class="tw"><table class="x"><tr><th>구간</th><th>기간</th><th>그냥 보유</th>${cols.map(c => `<th>${c.label}</th>`).join('')}</tr>` +
+      BTB.rows.map(b => { const x0 = b.res[0]; if (x0.err) return `<tr><td class="c">${b.n}</td><td colspan="${cols.length + 2}" class="muted" style="text-align:left">${esc(x0.err)}</td></tr>`;
+        const best = Math.max(...b.res.map(x => x.err ? -9 : x.retS));
+        return `<tr><td class="c">${b.n}</td><td class="c">${x0.d0.slice(2)}~${x0.d1.slice(2)}</td><td class="${cls(x0.retB)}">${pct(x0.retB, 1)}</td>${b.res.map(x => { if (x.err) return '<td>-</td>'; const df = x.retS - x.retB, ds = x.hold - x.total0, hl = x.retS === best && b.res.length > 1 ? 'background:#fff7d6' : '';
+          if (isAll(b)) { const rt = ratio(x); return `<td class="${cls(rt - 1)}" style="${hl}"><b>${rt.toFixed(2)}배</b><span class="muted"> (${ds >= 0 ? '+' : ''}${ds})</span></td>`; }
+          return `<td class="${cls(df)}" style="${hl}">${df >= 0 ? '+' : ''}${(df * 100).toFixed(1)}<span class="muted"> (${ds >= 0 ? '+' : ''}${ds})</span></td>`; }).join('')}</tr>`; }).join('') +
+      `<tr><td class="c" colspan="3"><b>하락장 구간 평균</b><br><span class="muted">전체 기간 제외 · ${subs.length}구간</span></td>${cols.map((c, j) => { const v = subs.map(b => b.res[j]).filter(x => !x.err); const av = v.length ? v.reduce((a, x) => a + x.retS - x.retB, 0) / v.length : null; return `<td class="${cls(av)}"><b>${av == null ? '-' : (av >= 0 ? '+' : '') + (av * 100).toFixed(1)}</b></td>`; }).join('')}</tr>` +
+      `<tr><td class="c" colspan="3"><b>승 / 패</b><br><span class="muted">원래 규칙 열은 그냥 보유 대비, 나머지는 원래 규칙 대비</span></td>${cols.map((c, j) => { let w = 0, l = 0, t = 0; subs.forEach(b => { const x = b.res[j]; if (x.err) return; const d = j === 0 ? x.retS - x.retB : x.retS - b.res[0].retS; if (d > 0.0005) w++; else if (d < -0.0005) l++; else t++; }); return `<td class="c"><b class="pos">${w}승</b> <b class="neg">${l}패</b>${t ? ` <span class="muted">${t}무</span>` : ''}</td>`; }).join('')}</tr>` +
+      `</table></div><div class="muted" style="margin-top:6px">노란 칸은 그 구간에서 가장 좋은 규칙입니다. 전체 기간은 16년 가까운 복리라 숫자가 커서 평균에서 뺐고, "그냥 보유로 1이 됐을 때 몇이 됐는지"로 표시합니다. 한 구간만 크게 좋아지는 개선안보다 <b>승이 많고 패의 폭이 작은</b> 개선안을 고르세요. 각 구간은 시작일에 ${num(P.totalQty)}주를 보유한 상태에서 따로 계산합니다.</div></div>`;
+  }
+  if (BTB && !BTB.cols) {
     out += `<div class="card"><h3>③ 하락장 구간 일괄 결과 — ${esc(P.ticker)}</h3><div class="tw"><table class="x"><tr><th>구간</th><th>기간</th><th>그냥 보유</th><th>풍차</th><th>차이</th><th>주식 수 변화</th><th>회차</th><th>STOP</th><th>MDD (풍차/보유)</th></tr>` +
       BTB.map(b => { const x = b.res; if (x.err) return `<tr><td class="c">${b.n}</td><td colspan="8" class="c muted">${esc(x.err)}</td></tr>`; const ds = x.hold - x.total0; return `<tr><td class="c">${b.n}</td><td class="c">${x.d0.slice(2)}~${x.d1.slice(2)}</td><td class="${cls(x.retB)}">${pct(x.retB, 1)}</td><td class="${cls(x.retS)}">${pct(x.retS, 1)}</td><td class="${cls(x.retS - x.retB)}"><b>${((x.retS - x.retB) * 100).toFixed(1)}%p</b></td><td class="${cls(ds)}">${ds >= 0 ? '+' : ''}${ds}주</td><td>${x.rounds.length}</td><td>${x.cycles.filter(c => c.stopIdx != null).length}</td><td>${pct(x.mddS, 0)} / ${pct(x.mddB, 0)}</td></tr>`; }).join('') +
       `</table></div><div class="muted" style="margin-top:6px">구간 날짜는 대략적인 하락장 구간입니다. [기간 선택 → 직접 입력]으로 원하는 구간을 따로 볼 수 있습니다. 각 구간은 시작일에 ${num(P.totalQty)}주를 보유한 상태에서 따로 계산합니다.</div></div>`;
@@ -1492,7 +1714,8 @@ function vBacktest(it) {
    <li>MOC 매도는 그날 종가로 체결합니다.</li>
    <li>지정가 매수는 시가가 지정가 이하면 시가에, 장중 저가가 지정가 이하면 지정가에 체결한 것으로 봅니다. 프리장·애프터장 체결은 일봉에 없어 반영하지 못합니다.</li>
    <li>주봉 신호는 그 주 마지막 거래일 종가가 확정된 뒤 다음 거래일부터 적용합니다. 5주선 회복 때 50% 채우는 매수는 다음 거래일 시가로 계산합니다.</li>
-   <li>STOP은 다음 5거래일 종가로 미회수 수량 + 남은 현금으로 살 수 있는 만큼 나눠 삽니다. 이후 새 시작 신호가 나오면 늘어난 주식 수로 풍차를 다시 시작합니다.</li>
+   <li>STOP은 다음 5거래일 종가로 미회수 수량을 나눠 되사고, 남은 현금으로 살 수 있는 만큼 더 삽니다. 수량은 매일 그날 가격과 남은 현금으로 다시 계산합니다. 이후 새 시작 신호가 나오면 늘어난 주식 수로 풍차를 다시 시작합니다.</li>
+   <li>개선안 ②(반등 추격)·⑥(재투자)의 매수는 조건이 확인된 다음 거래일 시가로 계산합니다. ①·⑦은 전날 종가와 직전 주봉 30주선으로 판단합니다. ⑤의 변동폭은 출발 전날까지의 20일 일봉으로 계산합니다.</li>
    <li>가격은 야후·네이버의 액면분할 반영 가격입니다. 배당과 환율은 반영하지 않습니다. 기간잔량 주문은 만료 없이 이어진 것으로 봅니다.</li>
    <li>과거 결과가 앞으로의 수익을 보장하지 않습니다.</li></ul></div>`;
   return out;
@@ -1507,7 +1730,9 @@ Object.assign(A, {
   btGap(i, v) { BTP().gaps[i] = num(v); render(); },
   btGapReset(m) { BTP().gaps = (m === 'US' ? GAP_US : GAP_KR).slice(); render(); },
   btPreset(k) { const P = BTP(); P.preset = +k; const p = (BT_PRE[P.market] || BT_PRE.US)[+k]; if (p) { P.start = p.s; P.end = p.e; } render(); },
-  btFromItem() { const P = BTP(), d = btDefaults(IT()); ['market', 'krType', 'ticker', 'indexTicker', 'totalQty', 'coreQty', 'slots', 'sellDays', 'gaps', 'buyFee', 'sellFee', 'sellTax', 'minGap'].forEach(k => P[k] = d[k]); toast('현재 종목 설정을 가져왔습니다'); render(); },
+  btFromItem() { const P = BTP(), d = btDefaults(IT()); ['market', 'krType', 'ticker', 'indexTicker', 'totalQty', 'coreQty', 'slots', 'sellDays', 'gaps', 'buyFee', 'sellFee', 'sellTax', 'minGap', 'adv'].forEach(k => P[k] = d[k]); toast('현재 종목 설정(개선안 포함)을 가져왔습니다'); render(); },
+  btAdv(k, v, t) { const P = BTP(); P.adv = advOf(P); P.adv[k] = t === 'number' ? num(v) : v; render(); },
+  btAdvToItem() { const it = IT(); if (!confirm(`백테스트의 개선안 설정을 실전 종목 "${it.name || it.ticker}"에 적용할까요?`)) return; const old = advOf(it); it.adv = { ...advOf(BTP()) }; it.adv.on6Since = it.adv.on6 ? (old.on6 && old.on6Since ? old.on6Since : today()) : ''; toast('실전 종목에 개선안을 적용했습니다'); render(); },
   async btLoad() {
     const P = BTP();
     if (!S.webappUrl) return toast('[설정]에서 웹앱 URL을 먼저 입력하세요');
@@ -1544,14 +1769,23 @@ Object.assign(A, {
     const P = BTP();
     if (!BTD.t) return toast('먼저 데이터를 불러오세요');
     const pre = (BT_PRE[P.market] || BT_PRE.US)[+P.preset];
-    const main = btRun(P, BTD.t, BTD.i);
-    BTR = { main, title: pre ? pre.n : '직접 입력', vars: P.compare && !main.err ? [{ label: '기본', res: main }, { label: '×0.8 (좁게)', res: btRun(P, BTD.t, BTD.i, { mul: 0.8 }) }, { label: '×1.2 (넓게)', res: btRun(P, BTD.t, BTD.i, { mul: 1.2 }) }] : null };
+    const a = advOf(P), on = anyAdv(a);
+    const main = btRun(P, BTD.t, BTD.i, { adv: a });
+    let cmp = null;
+    if (on && !main.err) {
+      cmp = [{ label: '원래 규칙', res: btRun(P, BTD.t, BTD.i, { adv: advNone(a) }) }, { label: '<b>개선안 (켠 것 전부)</b>', res: main }];
+      if (P.eachAdv) ADV_KEYS.filter(k => a[k]).forEach(k => cmp.push({ label: ADV_NAME[k] + ' 단독', res: btRun(P, BTD.t, BTD.i, { adv: advOnly(a, k) }) }));
+    }
+    BTR = { main, cmp, title: pre ? pre.n : '직접 입력', vars: P.compare && !main.err ? [{ label: '기본', res: main }, { label: '×0.8 (좁게)', res: btRun(P, BTD.t, BTD.i, { mul: 0.8, adv: a }) }, { label: '×1.2 (넓게)', res: btRun(P, BTD.t, BTD.i, { mul: 1.2, adv: a }) }] : null };
     BTB = null; render();
   },
   btBatch() {
     const P = BTP();
     if (!BTD.t) return toast('먼저 데이터를 불러오세요');
-    BTB = (BT_PRE[P.market] || BT_PRE.US).map(p => ({ n: p.n, res: btRun({ ...P, start: p.s, end: p.e }, BTD.t, BTD.i) }));
+    const a = advOf(P), on = anyAdv(a);
+    const cols = [{ label: '원래 규칙', adv: advNone(a) }];
+    if (on) { cols.push({ label: '개선안 전부', adv: a }); if (P.eachAdv) ADV_KEYS.filter(k => a[k]).forEach(k => cols.push({ label: ADV_NAME[k].slice(0, 1) + ' 단독', adv: advOnly(a, k) })); }
+    BTB = { cols, rows: (BT_PRE[P.market] || BT_PRE.US).map(p => ({ n: p.n, res: cols.map(c => btRun({ ...P, start: p.s, end: p.e }, BTD.t, BTD.i, { adv: c.adv })) })) };
     BTR = null; render();
   }
 });
